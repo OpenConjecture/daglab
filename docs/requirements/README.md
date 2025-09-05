@@ -8,9 +8,9 @@ Below is a complete, production-ready set of requirements for a Python CLI that 
 
 ## 1) Project overview
 
-**Working name:** `dagmar` (renameable)
+**Working name:** `daglab` (renameable)
 **Tagline:** "Scaffold and run paired marimo notebooks for Dagster assets & jobs."
-**Distribution:** PyPI package (`pip install dagmar`) with a single console entrypoint: `dagmar`
+**Distribution:** PyPI package (`pip install daglab`) with a single console entrypoint: `daglab`
 **Audience:** Data & ML engineers working locally on Dagster repos who want rapid, notebook-style experimentation that still launches real Dagster runs and attaches artifacts back to assets.
 
 ### 1.1 Goals
@@ -36,9 +36,9 @@ Below is a complete, production-ready set of requirements for a Python CLI that 
 
 ## 2) CLI surface (commands & UX)
 
-All commands are subcommands of `dagmar`. Respect `--help` on every command.
+All commands are subcommands of `daglab`. Respect `--help` on every command.
 
-### 2.1 `dagmar init`
+### 2.1 `daglab init`
 
 **Purpose:** Set up project-local config, directories, and templates. Can initialize within existing Dagster project or bootstrap a new one.
 
@@ -50,9 +50,9 @@ All commands are subcommands of `dagmar`. Respect `--help` on every command.
   * If not found: Offer to bootstrap new Dagster project with `--bootstrap` flag
 
 * **For Existing Projects:**
-  * Create `.dagmar/` (tool home) in project root
+  * Create `.daglab/` (tool home) in project root
   * Create `dagster/notebooks/` directory structure (paired notebooks alongside Dagster code)
-  * Create `dagmar.yaml` with project-aware defaults
+  * Create `daglab.yaml` with project-aware defaults
 
 * **For New Projects (--bootstrap):**
   * Create standard Dagster project structure:
@@ -69,26 +69,26 @@ All commands are subcommands of `dagmar`. Respect `--help` on every command.
           examples/
         resources/
           __init__.py
-      .dagmar/
+      .daglab/
         cache/
         templates/
       dagster.yaml
       workspace.yaml
-      dagmar.yaml
+      daglab.yaml
       pyproject.toml
     ```
   * Generate starter asset and job with corresponding example notebooks
-  * Configure both Dagster and dagmar settings
+  * Configure both Dagster and daglab settings
 
 * Create `.gitignore` entries for:
-  * `.dagmar/cache/`
+  * `.daglab/cache/`
   * `dagster/notebooks/*.html`
   * `dagster/notebooks/.ipynb_checkpoints/`
 
 * Optionally add a `justfile` or `Makefile` targets:
-  * `just dev` → `dagmar dev`
-  * `just scaffold <asset_or_job>` → `dagmar scaffold …`
-  * `just clean` → `dagmar clean`
+  * `just dev` → `daglab dev`
+  * `just scaffold <asset_or_job>` → `daglab scaffold …`
+  * `just clean` → `daglab clean`
 
 * Print next steps based on project type.
 
@@ -104,20 +104,20 @@ All commands are subcommands of `dagmar`. Respect `--help` on every command.
 **Acceptance:**
 
 * Running twice is idempotent (no clobber unless `--force`).
-* Produces a valid `dagmar.yaml` and appropriate directory structure.
+* Produces a valid `daglab.yaml` and appropriate directory structure.
 * Detects and respects existing Dagster project conventions.
 
 ---
 
-### 2.2 `dagmar scaffold`
+### 2.2 `daglab scaffold`
 
 **Purpose:** Generate a **paired marimo notebook** for a job or asset module.
 
 **Usage examples:**
 
-* `dagmar scaffold --job dev_asset_job --repo my_repo --location my_location`
-* `dagmar scaffold --asset orders --module assets/orders.py`
-* `dagmar scaffold --from-selection "orders/*"` (scaffold for asset group)
+* `daglab scaffold --job dev_asset_job --repo my_repo --location my_location`
+* `daglab scaffold --asset orders --module assets/orders.py`
+* `daglab scaffold --from-selection "orders/*"` (scaffold for asset group)
 
 **Behavior:**
 
@@ -133,7 +133,7 @@ All commands are subcommands of `dagmar`. Respect `--help` on every command.
   * Performance monitoring cell (memory usage, execution time comparison).
   * Optional "Export HTML & attach metadata" cell with retention policy.
   * Error recovery cell (reset state, retry failed runs).
-* Adds a lightweight **helper module** import (`from dagmar.helpers import *`).
+* Adds a lightweight **helper module** import (`from daglab.helpers import *`).
 * Auto-commits to git if `--git-commit` flag is provided.
 
 **Flags:**
@@ -157,7 +157,7 @@ All commands are subcommands of `dagmar`. Respect `--help` on every command.
 
 ---
 
-### 2.3 `dagmar dev`
+### 2.3 `daglab dev`
 
 **Purpose:** Start **Dagster UI** and **marimo editor** side-by-side (as a "sidecar" dev loop).
 
@@ -166,7 +166,7 @@ All commands are subcommands of `dagmar`. Respect `--help` on every command.
 * Spawns `dagster dev` (or `dg dev` if available) in subprocess with inherited env (`DAGSTER_HOME`, etc.).
 * Spawns `marimo edit <notebook.py> --watch --headless --port <port>`.
 * Handles port conflicts with auto-increment (tries next 10 ports).
-* Stores successful ports in `.dagmar/last_ports.json`.
+* Stores successful ports in `.daglab/last_ports.json`.
 * Opens both URLs (`http://localhost:<dagster_port>` and `http://localhost:<marimo_port>`) in browser.
 * Monitors resource usage and logs performance metrics.
 * Handles clean shutdown on Ctrl-C with graceful child process termination.
@@ -191,7 +191,7 @@ All commands are subcommands of `dagmar`. Respect `--help` on every command.
 
 ---
 
-### 2.4 `dagmar discover`
+### 2.4 `daglab discover`
 
 **Purpose:** List repositories, code locations, jobs, and assets via GraphQL.
 
@@ -213,12 +213,12 @@ All commands are subcommands of `dagmar`. Respect `--help` on every command.
 
 **Acceptance:**
 
-* Fails gracefully if UI not running, with suggestion to run `dagmar dev`.
+* Fails gracefully if UI not running, with suggestion to run `daglab dev`.
 * Handles auth failures with clear messages.
 
 ---
 
-### 2.5 `dagmar run`
+### 2.5 `daglab run`
 
 **Purpose:** Trigger a job or asset selection run (non-notebook path; useful for scripting).
 
@@ -248,7 +248,7 @@ All commands are subcommands of `dagmar`. Respect `--help` on every command.
 
 ---
 
-### 2.6 `dagmar export`
+### 2.6 `daglab export`
 
 **Purpose:** Export a marimo notebook to HTML and **attach** it as Dagster metadata.
 
@@ -277,14 +277,14 @@ All commands are subcommands of `dagmar`. Respect `--help` on every command.
 
 ---
 
-### 2.7 `dagmar clean`
+### 2.7 `daglab clean`
 
 **Purpose:** Clean up artifacts, temp files, and old exports.
 
 **Behavior:**
 
 * Removes HTML exports older than retention period.
-* Clears `.dagmar/cache/`.
+* Clears `.daglab/cache/`.
 * Optionally removes all generated notebooks with `--notebooks`.
 * Shows what would be deleted with `--dry-run`.
 
@@ -297,7 +297,7 @@ All commands are subcommands of `dagmar`. Respect `--help` on every command.
 
 ---
 
-### 2.8 `dagmar doctor`
+### 2.8 `daglab doctor`
 
 **Purpose:** Comprehensive diagnostics and dependency checking.
 
@@ -308,7 +308,7 @@ All commands are subcommands of `dagmar`. Respect `--help` on every command.
 * Tests GraphQL endpoint with auth if UI is up.
 * Checks for dependency conflicts.
 * Monitors GraphQL query performance.
-* Validates `dagmar.yaml` configuration.
+* Validates `daglab.yaml` configuration.
 * Reports telemetry status.
 
 **Flags:**
@@ -323,7 +323,7 @@ All commands are subcommands of `dagmar`. Respect `--help` on every command.
 
 ---
 
-### 2.9 `dagmar stats`
+### 2.9 `daglab stats`
 
 **Purpose:** Usage statistics and performance metrics.
 
@@ -341,7 +341,7 @@ All commands are subcommands of `dagmar`. Respect `--help` on every command.
 
 ---
 
-### 2.10 `dagmar migrate`
+### 2.10 `daglab migrate`
 
 **Purpose:** Migrate from Jupyter notebooks to marimo format.
 
@@ -349,7 +349,7 @@ All commands are subcommands of `dagmar`. Respect `--help` on every command.
 
 * Converts `.ipynb` files to marimo Python notebooks.
 * Preserves cell structure and markdown.
-* Adds dagmar helper imports.
+* Adds daglab helper imports.
 * Creates migration report.
 
 **Flags:**
@@ -362,10 +362,10 @@ All commands are subcommands of `dagmar`. Respect `--help` on every command.
 
 ## 3) Configuration
 
-### 3.1 `dagmar.yaml` (project-level)
+### 3.1 `daglab.yaml` (project-level)
 
 ```yaml
-# dagmar.yaml
+# daglab.yaml
 version: 1.0
 notebooks_dir: dagster/notebooks  # Default location alongside Dagster code
 dagster:
@@ -400,16 +400,16 @@ export:
   cloud_storage:
     provider: none  # or s3, gcs, azure
     bucket: null
-    prefix: dagmar-exports/
+    prefix: daglab-exports/
 logging:
   level: INFO
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  file: .dagmar/dagmar.log
+  file: .daglab/daglab.log
   max_bytes: 10485760  # 10MB
   backup_count: 5
 telemetry:
   enabled: false
-  endpoint: https://telemetry.dagmar.io
+  endpoint: https://telemetry.daglab.io
   anonymous_id: null  # generated on first run
 security:
   sandbox_mode: false
@@ -423,10 +423,10 @@ security:
 
 ```
 1. CLI flags (highest priority)
-2. Environment variables (DAGMAR_*)
-3. dagmar.yaml in current directory
-4. dagmar.yaml in parent directories (up to git root)
-5. ~/.dagmar/config.yaml (user global)
+2. Environment variables (daglab_*)
+3. daglab.yaml in current directory
+4. daglab.yaml in parent directories (up to git root)
+5. ~/.daglab/config.yaml (user global)
 6. Defaults (lowest priority)
 ```
 
@@ -436,13 +436,13 @@ security:
 [project]
 # ... existing project config ...
 
-[tool.dagmar]
+[tool.daglab]
 notebooks_dir = "dagster/notebooks"
 auto_discover = true
 
 [project.optional-dependencies]
 notebooks = [
-  "dagmar>=0.1.0",
+  "daglab>=0.1.0",
   "marimo>=0.7.0",
 ]
 ```
@@ -452,10 +452,10 @@ notebooks = [
 ## 4) Package architecture
 
 ```
-dagmar/
+daglab/
   __init__.py
   cli.py                    # Typer entrypoints
-  config.py                 # load/validate dagmar.yaml with override hierarchy
+  config.py                 # load/validate daglab.yaml with override hierarchy
   bootstrap.py              # New Dagster project scaffolding
   templates/
     notebook_default.py.j2
@@ -524,7 +524,7 @@ tests/
   * `build>=1.0`, `twine>=4.0`
   * `pre-commit>=3.5`
 * Provide **`constraints.txt`** with tested version pins.
-* Include `dagmar check-deps` command for compatibility verification.
+* Include `daglab check-deps` command for compatibility verification.
 
 ---
 
@@ -545,7 +545,7 @@ Generated file: `dagster/notebooks/<name>_explore.py` (a **marimo** Python noteb
 2. **Imports & App**
    ```python
    import marimo as mo
-   from dagmar.helpers import (
+   from daglab.helpers import (
        run_job, discover, attach_metadata, run_inprocess,
        validate_config, track_performance, manage_state
    )
@@ -813,8 +813,8 @@ my_project/
       jobs/               # Mirrors job structure
     resources/
   tests/
-  .dagmar/                # Tool metadata
-  dagmar.yaml
+  .daglab/                # Tool metadata
+  daglab.yaml
 ```
 
 **Rationale:**
@@ -933,7 +933,7 @@ my_project/
 
 ```toml
 [project]
-name = "dagmar"
+name = "daglab"
 version = "0.1.0"
 description = "Paired marimo notebooks for Dagster: scaffold, run, and round-trip artifacts."
 readme = "README.md"
@@ -979,7 +979,7 @@ dev = [
 ]
 
 [project.scripts]
-dagmar = "dagmar.cli:app"
+daglab = "daglab.cli:app"
 
 [tool.mypy]
 python_version = "3.10"
@@ -1015,24 +1015,24 @@ markers = [
 
 ## 14) Acceptance criteria checklist (MVP)
 
-* [ ] `pip install dagmar` creates working `dagmar` CLI
-* [ ] `dagmar init` detects existing projects and bootstraps new ones correctly
-* [ ] `dagmar init --bootstrap` creates complete Dagster project structure
+* [ ] `pip install daglab` creates working `daglab` CLI
+* [ ] `daglab init` detects existing projects and bootstraps new ones correctly
+* [ ] `daglab init --bootstrap` creates complete Dagster project structure
 * [ ] Notebooks are created in `dagster/notebooks/` by default
-* [ ] `dagmar scaffold --job <name>` generates runnable notebook with:
+* [ ] `daglab scaffold --job <name>` generates runnable notebook with:
   * [ ] State management across cells
   * [ ] Auth-aware GraphQL connection
   * [ ] Config validation before submission
   * [ ] Performance tracking
   * [ ] Error recovery mechanisms
-* [ ] `dagmar dev` handles port conflicts gracefully
-* [ ] `dagmar discover` works with authenticated instances
-* [ ] `dagmar run` validates configs and manages concurrent runs
-* [ ] `dagmar export` supports cloud storage and retention
-* [ ] `dagmar clean` removes old artifacts safely
-* [ ] `dagmar doctor` provides actionable diagnostics
-* [ ] `dagmar stats` shows usage metrics
-* [ ] `dagmar migrate` converts Jupyter notebooks
+* [ ] `daglab dev` handles port conflicts gracefully
+* [ ] `daglab discover` works with authenticated instances
+* [ ] `daglab run` validates configs and manages concurrent runs
+* [ ] `daglab export` supports cloud storage and retention
+* [ ] `daglab clean` removes old artifacts safely
+* [ ] `daglab doctor` provides actionable diagnostics
+* [ ] `daglab stats` shows usage metrics
+* [ ] `daglab migrate` converts Jupyter notebooks
 * [ ] Security features (input sanitization, sandbox mode) work
 * [ ] All tests pass in CI
 * [ ] Documentation covers all use cases
