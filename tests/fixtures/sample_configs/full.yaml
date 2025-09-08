@@ -1,0 +1,79 @@
+# Complete daglab configuration example
+version: "1.0"
+notebooks_dir: "dagster/notebooks"
+
+# Dagster-specific configuration
+dagster:
+  project_dir: "."
+  module_name: "my_dagster_project"
+  repository_name: "my_repo"
+  assets_module: "assets"
+  jobs_module: "jobs"
+
+# Marimo notebook configuration
+marimo:
+  port_range_start: 2718
+  port_range_end: 2818
+  auto_reload: true
+  theme: "light"
+  layout_file: null
+
+# Default values for generated content
+defaults:
+  author: "Data Team"
+  email: "data@example.com"
+  license: "MIT"
+  python_version: "3.10"
+  tags:
+    - "data-pipeline"
+    - "marimo"
+    - "dagster"
+
+# Performance tuning
+performance:
+  max_workers: 4
+  timeout: 300
+  cache_enabled: true
+  cache_dir: "~/.cache/daglab"
+
+# Export settings
+export:
+  formats:
+    - "python"
+    - "html"
+    - "markdown"
+  output_dir: "./exports"
+  include_metadata: true
+  minify: false
+
+# Logging configuration
+logging:
+  level: "INFO"
+  file: "./logs/daglab.log"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  json_format: false
+  rotation: "10MB"
+  retention: 7
+
+# Telemetry settings
+telemetry:
+  enabled: false
+  level: "anonymous"
+  endpoint: null
+  batch_size: 100
+  flush_interval: 60
+
+# Security configuration
+security:
+  sandbox_enabled: true
+  allowed_imports:
+    - "dagster"
+    - "marimo"
+    - "pandas"
+    - "numpy"
+    - "matplotlib"
+    - "seaborn"
+    - "scikit-learn"
+  restricted_paths: []
+  validate_inputs: true
+  max_file_size: 104857600  # 100MB

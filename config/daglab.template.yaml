@@ -1,0 +1,162 @@
+# daglab Configuration Template
+# 
+# This file provides a template for daglab configuration.
+# Copy this file to one of the following locations:
+#   - ./daglab.yaml (current directory)
+#   - ~/.config/daglab/config.yaml (user config)
+#   - ~/.daglab/config.yaml (alternative user config)
+#
+# Environment variables can override any setting using the daglab_ prefix:
+#   - daglab_version=2.0
+#   - daglab_notebooks_dir=/custom/path
+#   - daglab_dagster__assets_module=my_assets
+#   - daglab_logging__level=DEBUG
+
+# Configuration version (do not change unless upgrading)
+version: "1.0"
+
+# Directory where marimo notebooks will be created
+notebooks_dir: "dagster/notebooks"
+
+# Dagster project configuration
+dagster:
+  # Path to Dagster project (defaults to current directory)
+  # project_dir: "."
+  
+  # Dagster module name (auto-detected if not specified)
+  # module_name: null
+  
+  # Dagster repository name (auto-detected if not specified)
+  # repository_name: null
+  
+  # Module containing Dagster assets
+  assets_module: "assets"
+  
+  # Module containing Dagster jobs
+  jobs_module: "jobs"
+
+# Marimo notebook server configuration
+marimo:
+  # Port range for marimo servers
+  port_range_start: 2718
+  port_range_end: 2818
+  
+  # Enable auto-reload on file changes
+  auto_reload: true
+  
+  # Default theme (light/dark)
+  theme: "light"
+  
+  # Custom layout configuration file
+  # layout_file: null
+
+# Default values for generated content
+defaults:
+  # Default author name
+  # author: "Your Name"
+  
+  # Default email
+  # email: "your.email@example.com"
+  
+  # Default license
+  license: "MIT"
+  
+  # Default Python version requirement
+  python_version: "3.10"
+  
+  # Default tags for generated assets
+  # tags:
+  #   - "data-pipeline"
+  #   - "analytics"
+
+# Performance configuration
+performance:
+  # Maximum number of parallel workers
+  max_workers: 4
+  
+  # Default operation timeout in seconds
+  timeout: 300
+  
+  # Enable caching for better performance
+  cache_enabled: true
+  
+  # Cache directory
+  # cache_dir: "~/.cache/daglab"
+
+# Export configuration
+export:
+  # Default export formats
+  formats:
+    - "python"
+    - "html"
+  
+  # Export output directory
+  # output_dir: "./exports"
+  
+  # Include metadata in exports
+  include_metadata: true
+  
+  # Minify exported code
+  minify: false
+
+# Logging configuration
+logging:
+  # Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+  level: "INFO"
+  
+  # Log file path (null for stdout only)
+  # file: "./logs/daglab.log"
+  
+  # Log message format
+  # format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  
+  # Use JSON format for structured logging
+  json_format: false
+  
+  # Log rotation size or interval
+  rotation: "10MB"
+  
+  # Number of rotated logs to keep
+  retention: 7
+
+# Telemetry configuration
+telemetry:
+  # Enable telemetry collection
+  enabled: false
+  
+  # Telemetry level (off, anonymous, full)
+  level: "anonymous"
+  
+  # Custom telemetry endpoint
+  # endpoint: null
+  
+  # Telemetry batch size
+  batch_size: 100
+  
+  # Telemetry flush interval in seconds
+  flush_interval: 60
+
+# Security configuration
+security:
+  # Enable notebook sandboxing
+  sandbox_enabled: true
+  
+  # Allowed imports in notebooks
+  allowed_imports:
+    - "dagster"
+    - "marimo"
+    - "pandas"
+    - "numpy"
+    - "matplotlib"
+    - "seaborn"
+  
+  # Restricted file paths
+  # restricted_paths:
+  #   - "/etc"
+  #   - "/var"
+  
+  # Enable input validation
+  validate_inputs: true
+  
+  # Maximum allowed file size in bytes (100MB)
+  max_file_size: 104857600
