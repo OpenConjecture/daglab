@@ -1,0 +1,19 @@
+# Machine Learning requirements for DagLab
+# Include base requirements
+-r base.txt
+
+# Ray for distributed computing
+ray[default]>=2.9.0
+ray[serve]>=2.9.0
+
+# ML frameworks
+mlflow>=2.10.0
+numpy>=1.26.0
+pandas>=2.2.0
+scikit-learn>=1.4.0
+
+# GPU support (optional)
+# Uncomment based on your CUDA version
+# torch>=2.2.0
+# cupy-cuda12x>=13.0.0  # For CUDA 12.x
+# jax[cuda12_pip]>=0.4.23  # For CUDA 12.x

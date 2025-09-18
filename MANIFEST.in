@@ -1,0 +1,63 @@
+# Include essential files
+include LICENSE
+include README.md
+include CHANGELOG.md
+include CONTRIBUTING.md
+include pyproject.toml
+
+# Include type information
+include src/daglab/py.typed
+
+# Include configuration files
+recursive-include src/daglab *.json *.yaml *.yml
+
+# Include test data for development installations
+recursive-include tests *.py *.json *.yaml *.yml
+prune tests/__pycache__
+
+# Include documentation source
+recursive-include docs *.md *.rst *.txt
+prune docs/_build
+
+# Include example files
+recursive-include examples *.py *.yaml *.json
+prune examples/__pycache__
+
+# Exclude development and build artifacts
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude *~
+global-exclude *.so
+global-exclude *.dylib
+global-exclude .DS_Store
+global-exclude .gitignore
+global-exclude .coverage
+global-exclude .pytest_cache
+global-exclude .mypy_cache
+global-exclude .ruff_cache
+global-exclude .tox
+global-exclude .nox
+global-exclude htmlcov
+global-exclude *.egg-info
+global-exclude dist
+global-exclude build
+global-exclude .git
+global-exclude .github
+global-exclude .vscode
+global-exclude .idea
+
+# Exclude temporary files
+global-exclude *.swp
+global-exclude *.swo
+global-exclude *.swn
+global-exclude *.orig
+global-exclude *.rej
+
+# Exclude environment files
+global-exclude .env
+global-exclude .env.*
+global-exclude *.env
+
+# Include specific configuration templates
+include config/*.template
+include config/*.example

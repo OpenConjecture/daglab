@@ -1,0 +1,119 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Python files
+*.py text diff=python
+*.pyi text diff=python
+*.pyx text diff=python
+*.pxd text diff=python
+*.pxi text diff=python
+
+# Shell scripts
+*.sh text eol=lf
+*.bash text eol=lf
+*.zsh text eol=lf
+
+# Windows scripts
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Configuration files
+*.json text
+*.yaml text
+*.yml text
+*.toml text
+*.ini text
+*.cfg text
+*.conf text
+
+# Documentation
+*.md text
+*.rst text
+*.txt text
+LICENSE text
+CHANGELOG text
+CONTRIBUTING text
+README text
+AUTHORS text
+
+# Web files
+*.html text diff=html
+*.css text diff=css
+*.js text diff=javascript
+*.jsx text diff=javascript
+*.ts text diff=typescript
+*.tsx text diff=typescript
+
+# Data files
+*.csv text
+*.tsv text
+*.sql text
+*.xml text
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.pdf binary
+*.doc binary
+*.docx binary
+*.xls binary
+*.xlsx binary
+*.ppt binary
+*.pptx binary
+*.zip binary
+*.gz binary
+*.tar binary
+*.7z binary
+*.rar binary
+
+# Python specific binary
+*.pyc binary
+*.pyo binary
+*.pyd binary
+*.so binary
+*.egg binary
+*.whl binary
+
+# Jupyter notebooks
+*.ipynb text eol=lf
+
+# Git files
+.gitignore text
+.gitattributes text
+.gitmodules text
+
+# Docker files
+Dockerfile text
+.dockerignore text
+docker-compose*.yml text
+
+# CI/CD files
+.travis.yml text
+.gitlab-ci.yml text
+azure-pipelines.yml text
+.github/*.yml text
+.github/**/*.yml text
+
+# Lock files (treat as binary to avoid merge conflicts)
+package-lock.json binary
+yarn.lock binary
+poetry.lock binary
+Pipfile.lock binary
+requirements*.txt text
+
+# Exclude files from language statistics
+docs/* linguist-documentation
+examples/* linguist-documentation
+tests/* linguist-vendored
+*.min.js linguist-vendored
+*.min.css linguist-vendored
+
+# Mark generated files
+*_pb2.py linguist-generated
+*_pb2_grpc.py linguist-generated
+src/daglab/_version.py linguist-generated
