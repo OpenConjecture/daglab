@@ -1,0 +1,49 @@
+# Example job configuration for daglab run command
+# Usage: daglab run --job daily_etl --run-config job_config.yaml
+
+# Op-level configuration
+ops:
+  extract_data:
+    config:
+      source_db: ${SOURCE_DB_URL:-postgresql://localhost/source}
+      batch_size: 1000
+      start_date: "2024-01-01"
+      
+  transform_data:
+    config:
+      transformations:
+        - type: clean_nulls
+        - type: validate_schema
+        - type: deduplicate
+      output_format: parquet
+      
+  load_data:
+    config:
+      target_db: ${TARGET_DB_URL:-postgresql://localhost/target}
+      mode: append
+      create_indexes: true
+
+# Resources configuration
+resources:
+  database:
+    config:
+      connection_string: ${DB_CONNECTION:-postgresql://user:pass@localhost/dagster}
+      pool_size: 5
+      
+  s3:
+    config:
+      bucket: ${S3_BUCKET:-my-data-bucket}
+      region: ${AWS_REGION:-us-east-1}
+      prefix: dagster/runs
+
+# Run configuration
+execution:
+  config:
+    multiprocess:
+      max_concurrent: 4
+
+# Log level
+loggers:
+  console:
+    config:
+      log_level: INFO

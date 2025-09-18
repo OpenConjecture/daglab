@@ -1,411 +1,543 @@
-"""Custom exception hierarchy for daglab with error codes and remediation.
+"""Custom exception hierarchy with error codes and remediation guidance."""
 
-Provides structured error handling with clear messages, error codes,
-and actionable remediation steps.
-"""
-
-import json
-import traceback
-from enum import Enum
-from typing import Any, Dict, Optional, List
+import sys
+from enum import IntEnum
+from typing import Any, Dict, List, Optional, Type
 
 
-class ErrorCode(Enum):
-    """Standardized error codes for daglab."""
+class ExitCode(IntEnum):
+    """Standard exit codes for Daglab operations."""
+    SUCCESS = 0
+    GENERAL_ERROR = 1
+    MISUSE = 2
+    CANNOT_EXECUTE = 126
+    COMMAND_NOT_FOUND = 127
     
-    # Configuration errors (1xxx)
-    CONFIG_NOT_FOUND = 1001
-    CONFIG_INVALID = 1002
-    CONFIG_MISSING_REQUIRED = 1003
+    # Custom Daglab error codes (128+)
+    CONFIGURATION_ERROR = 130
+    VALIDATION_ERROR = 131
+    SECURITY_ERROR = 132
+    NETWORK_ERROR = 133
+    STORAGE_ERROR = 134
+    COMPUTE_ERROR = 135
+    SCHEDULING_ERROR = 136
+    RUNTIME_ERROR = 137
+    DEPENDENCY_ERROR = 138
+    AUTHENTICATION_ERROR = 139
+    AUTHORIZATION_ERROR = 140
+    RESOURCE_ERROR = 141
+    TIMEOUT_ERROR = 142
+    INTEGRATION_ERROR = 143
+
+
+class ErrorContext:
+    """Context information for debugging errors."""
     
-    # Asset errors (2xxx)
-    ASSET_NOT_FOUND = 2001
-    ASSET_INVALID_DEFINITION = 2002
-    ASSET_DEPENDENCY_MISSING = 2003
-    ASSET_EXECUTION_FAILED = 2004
-    ASSET_VALIDATION_FAILED = 2005
+    def __init__(
+        self,
+        operation: Optional[str] = None,
+        resource: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+        suggestions: Optional[List[str]] = None
+    ):
+        self.operation = operation
+        self.resource = resource
+        self.details = details or {}
+        self.suggestions = suggestions or []
     
-    # Notebook errors (3xxx)
-    NOTEBOOK_NOT_FOUND = 3001
-    NOTEBOOK_INVALID_FORMAT = 3002
-    NOTEBOOK_EXECUTION_ERROR = 3003
-    NOTEBOOK_KERNEL_ERROR = 3004
-    NOTEBOOK_CELL_ERROR = 3005
-    
-    # Runtime errors (4xxx)
-    RUNTIME_INITIALIZATION_FAILED = 4001
-    RUNTIME_EXECUTION_FAILED = 4002
-    RUNTIME_RESOURCE_EXHAUSTED = 4003
-    RUNTIME_TIMEOUT = 4004
-    RUNTIME_PERMISSION_DENIED = 4005
-    
-    # Storage errors (5xxx)
-    STORAGE_CONNECTION_FAILED = 5001
-    STORAGE_READ_FAILED = 5002
-    STORAGE_WRITE_FAILED = 5003
-    STORAGE_PERMISSION_DENIED = 5004
-    
-    # Validation errors (6xxx)
-    VALIDATION_SCHEMA_INVALID = 6001
-    VALIDATION_DATA_INVALID = 6002
-    VALIDATION_TYPE_MISMATCH = 6003
-    
-    # Network errors (7xxx)
-    NETWORK_CONNECTION_FAILED = 7001
-    NETWORK_TIMEOUT = 7002
-    NETWORK_AUTHENTICATION_FAILED = 7003
-    
-    # Unknown error
-    UNKNOWN_ERROR = 9999
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert context to dictionary."""
+        return {
+            'operation': self.operation,
+            'resource': self.resource,
+            'details': self.details,
+            'suggestions': self.suggestions
+        }
 
 
 class DaglabError(Exception):
-    """Base exception class for all daglab errors."""
+    """Base exception class for all Daglab errors."""
     
-    error_code: ErrorCode = ErrorCode.UNKNOWN_ERROR
-    default_message: str = "An error occurred in daglab"
+    exit_code: ExitCode = ExitCode.GENERAL_ERROR
+    default_message: str = "An error occurred in Daglab"
     
     def __init__(
         self,
         message: Optional[str] = None,
-        details: Optional[Dict[str, Any]] = None,
-        cause: Optional[Exception] = None,
-        remediation: Optional[List[str]] = None
+        context: Optional[ErrorContext] = None,
+        cause: Optional[Exception] = None
     ):
-        """Initialize the error with structured information."""
         self.message = message or self.default_message
-        self.details = details or {}
+        self.context = context or ErrorContext()
         self.cause = cause
-        self.remediation = remediation or self._get_default_remediation()
         
-        # Build the full error message
-        super().__init__(self._build_message())
+        super().__init__(self.message)
     
-    def _build_message(self) -> str:
-        """Build a comprehensive error message."""
-        parts = [
-            f"[{self.error_code.name}] {self.message}"
-        ]
+    def __str__(self) -> str:
+        """Human-readable error message."""
+        parts = [self.message]
+        
+        if self.context.operation:
+            parts.append(f"Operation: {self.context.operation}")
+        
+        if self.context.resource:
+            parts.append(f"Resource: {self.context.resource}")
+        
+        if self.context.details:
+            parts.append(f"Details: {self.context.details}")
         
         if self.cause:
             parts.append(f"Caused by: {type(self.cause).__name__}: {str(self.cause)}")
         
-        if self.details:
-            parts.append(f"Details: {json.dumps(self.details, indent=2)}")
-        
-        if self.remediation:
-            parts.append("Remediation steps:")
-            for i, step in enumerate(self.remediation, 1):
-                parts.append(f"  {i}. {step}")
+        if self.context.suggestions:
+            parts.append("\nSuggestions:")
+            for suggestion in self.context.suggestions:
+                parts.append(f"  - {suggestion}")
         
         return "\n".join(parts)
     
-    def _get_default_remediation(self) -> List[str]:
-        """Get default remediation steps for the error type."""
-        return [
-            "Check the error details for more information",
-            "Review the documentation at https://docs.daglab.io",
-            "Contact support if the issue persists"
-        ]
-    
     def to_dict(self) -> Dict[str, Any]:
-        """Convert error to dictionary for JSON serialization."""
+        """Convert error to dictionary for structured logging."""
         return {
-            'error_code': self.error_code.value,
-            'error_name': self.error_code.name,
+            'error_type': self.__class__.__name__,
             'message': self.message,
-            'details': self.details,
-            'remediation': self.remediation,
-            'traceback': traceback.format_exc() if self.cause else None
+            'exit_code': self.exit_code.value,
+            'context': self.context.to_dict(),
+            'cause': str(self.cause) if self.cause else None
         }
+    
+    @classmethod
+    def with_suggestions(cls, message: str, *suggestions: str) -> "DaglabError":
+        """Create error with remediation suggestions."""
+        context = ErrorContext(suggestions=list(suggestions))
+        return cls(message=message, context=context)
 
 
-# Configuration Errors
 class ConfigurationError(DaglabError):
-    """Base class for configuration-related errors."""
-    error_code = ErrorCode.CONFIG_INVALID
-    default_message = "Configuration error"
+    """Errors related to configuration loading or validation."""
+    exit_code = ExitCode.CONFIGURATION_ERROR
+    default_message = "Configuration error occurred"
 
 
-class ConfigNotFoundError(ConfigurationError):
-    """Raised when a configuration file cannot be found."""
-    error_code = ErrorCode.CONFIG_NOT_FOUND
-    default_message = "Configuration file not found"
-    
-    def _get_default_remediation(self) -> List[str]:
-        return [
-            "Ensure the configuration file exists in the expected location",
-            "Check if DAGLAB_CONFIG environment variable is set correctly",
-            "Run 'daglab init' to create a default configuration"
-        ]
-
-
-class ConfigInvalidError(ConfigurationError):
-    """Raised when configuration is invalid."""
-    error_code = ErrorCode.CONFIG_INVALID
-    default_message = "Invalid configuration"
-    
-    def _get_default_remediation(self) -> List[str]:
-        return [
-            "Validate your configuration against the schema",
-            "Check for syntax errors in the configuration file",
-            "Refer to the configuration documentation"
-        ]
-
-
-# Asset Errors
-class AssetError(DaglabError):
-    """Base class for asset-related errors."""
-    error_code = ErrorCode.ASSET_EXECUTION_FAILED
-    default_message = "Asset error"
-
-
-class AssetNotFoundError(AssetError):
-    """Raised when an asset cannot be found."""
-    error_code = ErrorCode.ASSET_NOT_FOUND
-    default_message = "Asset not found"
-    
-    def _get_default_remediation(self) -> List[str]:
-        return [
-            "Verify the asset name is correct",
-            "Check if the asset is registered in the asset catalog",
-            "Ensure the asset module is properly imported"
-        ]
-
-
-class AssetDependencyError(AssetError):
-    """Raised when asset dependencies are not met."""
-    error_code = ErrorCode.ASSET_DEPENDENCY_MISSING
-    default_message = "Asset dependency not satisfied"
-    
-    def _get_default_remediation(self) -> List[str]:
-        return [
-            "Check that all upstream dependencies are defined",
-            "Verify dependency names are correct",
-            "Ensure dependencies are executed before this asset"
-        ]
-
-
-class AssetExecutionError(AssetError):
-    """Raised when asset execution fails."""
-    error_code = ErrorCode.ASSET_EXECUTION_FAILED
-    default_message = "Asset execution failed"
-    
-    def _get_default_remediation(self) -> List[str]:
-        return [
-            "Check the asset logs for detailed error information",
-            "Verify input data is in the expected format",
-            "Ensure all required resources are available",
-            "Review the asset implementation for bugs"
-        ]
-
-
-# Notebook Errors
-class NotebookError(DaglabError):
-    """Base class for notebook-related errors."""
-    error_code = ErrorCode.NOTEBOOK_EXECUTION_ERROR
-    default_message = "Notebook error"
-
-
-class NotebookNotFoundError(NotebookError):
-    """Raised when a notebook cannot be found."""
-    error_code = ErrorCode.NOTEBOOK_NOT_FOUND
-    default_message = "Notebook not found"
-    
-    def _get_default_remediation(self) -> List[str]:
-        return [
-            "Verify the notebook path is correct",
-            "Check if the notebook file exists",
-            "Ensure the notebook is in the expected directory"
-        ]
-
-
-class NotebookExecutionError(NotebookError):
-    """Raised when notebook execution fails."""
-    error_code = ErrorCode.NOTEBOOK_EXECUTION_ERROR
-    default_message = "Notebook execution failed"
-    
-    def _get_default_remediation(self) -> List[str]:
-        return [
-            "Check the notebook cells for errors",
-            "Verify all dependencies are installed",
-            "Review the kernel logs for detailed error information",
-            "Ensure the notebook environment matches requirements"
-        ]
-
-
-class NotebookCellError(NotebookError):
-    """Raised when a specific notebook cell fails."""
-    error_code = ErrorCode.NOTEBOOK_CELL_ERROR
-    default_message = "Notebook cell execution failed"
-    
-    def _get_default_remediation(self) -> List[str]:
-        return [
-            "Review the failing cell for syntax errors",
-            "Check if required variables are defined in previous cells",
-            "Verify imports and dependencies are available",
-            "Run the notebook interactively to debug"
-        ]
-
-
-# Runtime Errors
-class RuntimeError(DaglabError):
-    """Base class for runtime errors."""
-    error_code = ErrorCode.RUNTIME_EXECUTION_FAILED
-    default_message = "Runtime error"
-
-
-class RuntimeInitializationError(RuntimeError):
-    """Raised when runtime initialization fails."""
-    error_code = ErrorCode.RUNTIME_INITIALIZATION_FAILED
-    default_message = "Runtime initialization failed"
-    
-    def _get_default_remediation(self) -> List[str]:
-        return [
-            "Check system requirements are met",
-            "Verify all dependencies are installed",
-            "Review initialization logs for errors",
-            "Ensure configuration is valid"
-        ]
-
-
-class RuntimeTimeoutError(RuntimeError):
-    """Raised when an operation times out."""
-    error_code = ErrorCode.RUNTIME_TIMEOUT
-    default_message = "Operation timed out"
-    
-    def _get_default_remediation(self) -> List[str]:
-        return [
-            "Increase the timeout value if the operation is expected to take longer",
-            "Check for performance issues or bottlenecks",
-            "Consider breaking the operation into smaller chunks",
-            "Review system resources (CPU, memory, network)"
-        ]
-
-
-class RuntimePermissionError(RuntimeError):
-    """Raised when permissions are insufficient."""
-    error_code = ErrorCode.RUNTIME_PERMISSION_DENIED
-    default_message = "Permission denied"
-    
-    def _get_default_remediation(self) -> List[str]:
-        return [
-            "Check file and directory permissions",
-            "Ensure the user has required privileges",
-            "Verify API credentials and access tokens",
-            "Review security policies and access controls"
-        ]
-
-
-# Storage Errors
-class StorageError(DaglabError):
-    """Base class for storage-related errors."""
-    error_code = ErrorCode.STORAGE_CONNECTION_FAILED
-    default_message = "Storage error"
-
-
-class StorageConnectionError(StorageError):
-    """Raised when storage connection fails."""
-    error_code = ErrorCode.STORAGE_CONNECTION_FAILED
-    default_message = "Failed to connect to storage"
-    
-    def _get_default_remediation(self) -> List[str]:
-        return [
-            "Verify storage connection credentials",
-            "Check network connectivity",
-            "Ensure storage service is accessible",
-            "Review firewall and security group settings"
-        ]
-
-
-class StorageReadError(StorageError):
-    """Raised when reading from storage fails."""
-    error_code = ErrorCode.STORAGE_READ_FAILED
-    default_message = "Failed to read from storage"
-    
-    def _get_default_remediation(self) -> List[str]:
-        return [
-            "Verify the resource exists in storage",
-            "Check read permissions on the resource",
-            "Ensure the storage path is correct",
-            "Review storage access logs for errors"
-        ]
-
-
-class StorageWriteError(StorageError):
-    """Raised when writing to storage fails."""
-    error_code = ErrorCode.STORAGE_WRITE_FAILED
-    default_message = "Failed to write to storage"
-    
-    def _get_default_remediation(self) -> List[str]:
-        return [
-            "Check write permissions on the destination",
-            "Verify sufficient storage space is available",
-            "Ensure the storage path is valid",
-            "Review storage quotas and limits"
-        ]
-
-
-# Validation Errors
 class ValidationError(DaglabError):
-    """Base class for validation errors."""
-    error_code = ErrorCode.VALIDATION_DATA_INVALID
-    default_message = "Validation error"
+    """Errors related to input validation."""
+    exit_code = ExitCode.VALIDATION_ERROR
+    default_message = "Validation error occurred"
 
 
-class SchemaValidationError(ValidationError):
-    """Raised when schema validation fails."""
-    error_code = ErrorCode.VALIDATION_SCHEMA_INVALID
-    default_message = "Schema validation failed"
+class SecurityError(DaglabError):
+    """Errors related to security violations."""
+    exit_code = ExitCode.SECURITY_ERROR
+    default_message = "Security violation detected"
+
+
+class NetworkError(DaglabError):
+    """Errors related to network operations."""
+    exit_code = ExitCode.NETWORK_ERROR
+    default_message = "Network operation failed"
+
+
+class StorageError(DaglabError):
+    """Errors related to storage operations."""
+    exit_code = ExitCode.STORAGE_ERROR
+    default_message = "Storage operation failed"
+
+
+class ComputeError(DaglabError):
+    """Errors related to compute operations."""
+    exit_code = ExitCode.COMPUTE_ERROR
+    default_message = "Compute operation failed"
+
+
+class SchedulingError(DaglabError):
+    """Errors related to task scheduling."""
+    exit_code = ExitCode.SCHEDULING_ERROR
+    default_message = "Scheduling operation failed"
+
+
+class RuntimeError(DaglabError):
+    """Errors that occur during runtime execution."""
+    exit_code = ExitCode.RUNTIME_ERROR
+    default_message = "Runtime error occurred"
+
+
+class DependencyError(DaglabError):
+    """Errors related to missing or incompatible dependencies."""
+    exit_code = ExitCode.DEPENDENCY_ERROR
+    default_message = "Dependency error occurred"
+
+
+class AuthenticationError(DaglabError):
+    """Errors related to authentication."""
+    exit_code = ExitCode.AUTHENTICATION_ERROR
+    default_message = "Authentication failed"
+
+
+class AuthorizationError(DaglabError):
+    """Errors related to authorization."""
+    exit_code = ExitCode.AUTHORIZATION_ERROR
+    default_message = "Authorization failed"
+
+
+class ResourceError(DaglabError):
+    """Errors related to resource availability or limits."""
+    exit_code = ExitCode.RESOURCE_ERROR
+    default_message = "Resource error occurred"
+
+
+class TimeoutError(DaglabError):
+    """Errors related to operation timeouts."""
+    exit_code = ExitCode.TIMEOUT_ERROR
+    default_message = "Operation timed out"
+
+
+class IntegrationError(DaglabError):
+    """Errors related to third-party integrations."""
+    exit_code = ExitCode.INTEGRATION_ERROR
+    default_message = "Integration error occurred"
+
+
+class ErrorHandler:
+    """Centralized error handling and reporting."""
     
-    def _get_default_remediation(self) -> List[str]:
-        return [
-            "Review the data against the expected schema",
-            "Check for missing required fields",
-            "Verify data types match schema definitions",
-            "Use validation tools to identify specific issues"
+    @staticmethod
+    def handle_error(
+        error: Exception,
+        exit_on_error: bool = True,
+        log_error: bool = True
+    ) -> Optional[int]:
+        """Handle an error with appropriate logging and exit behavior."""
+        if log_error:
+            import logging
+            logger = logging.getLogger("daglab.errors")
+            
+            if isinstance(error, DaglabError):
+                logger.error(
+                    f"{type(error).__name__}: {error.message}",
+                    extra=error.to_dict()
+                )
+            else:
+                logger.error(
+                    f"Unexpected error: {type(error).__name__}: {str(error)}",
+                    exc_info=True
+                )
+        
+        if exit_on_error:
+            exit_code = error.exit_code if isinstance(error, DaglabError) else ExitCode.GENERAL_ERROR
+            sys.exit(exit_code)
+        
+        return error.exit_code if isinstance(error, DaglabError) else ExitCode.GENERAL_ERROR
+    
+    @staticmethod
+    def wrap_error(
+        error: Exception,
+        error_class: Type[DaglabError] = DaglabError,
+        message: Optional[str] = None,
+        context: Optional[ErrorContext] = None
+    ) -> DaglabError:
+        """Wrap a standard exception in a DaglabError."""
+        if isinstance(error, DaglabError):
+            return error
+        
+        wrapped_message = message or f"{type(error).__name__}: {str(error)}"
+        return error_class(message=wrapped_message, context=context, cause=error)
+
+
+def graceful_degradation(
+    func,
+    fallback=None,
+    error_class: Type[DaglabError] = RuntimeError,
+    log_error: bool = True
+):
+    """Decorator for graceful degradation on errors."""
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            if log_error:
+                import logging
+                logger = logging.getLogger("daglab.errors")
+                logger.warning(f"Graceful degradation triggered: {str(e)}")
+            
+            if callable(fallback):
+                return fallback(*args, **kwargs)
+            return fallback
+    
+    return wrapper
+
+
+class ErrorRecovery:
+    """Advanced error recovery strategies."""
+    
+    def __init__(self, max_retries: int = 3, backoff_factor: float = 2.0):
+        self.max_retries = max_retries
+        self.backoff_factor = backoff_factor
+        self._recovery_strategies = {}
+        self._error_patterns = {}
+        self._register_default_strategies()
+    
+    def _register_default_strategies(self):
+        """Register default recovery strategies."""
+        # Network errors
+        self.register_strategy(
+            NetworkError,
+            lambda e: [
+                "Check your internet connection",
+                "Verify the remote server is accessible",
+                "Check firewall settings",
+                "Try using a VPN if the service is region-locked",
+                f"Retry with: daglab {e.context.operation or 'command'} --retry"
+            ]
+        )
+        
+        # Configuration errors
+        self.register_strategy(
+            ConfigurationError,
+            lambda e: [
+                "Run: daglab config validate",
+                "Check configuration file syntax",
+                "Ensure all required fields are present",
+                "Review environment variables",
+                "Use: daglab config generate --template"
+            ]
+        )
+        
+        # Authentication errors
+        self.register_strategy(
+            AuthenticationError,
+            lambda e: [
+                "Check your credentials",
+                "Run: daglab auth login",
+                "Verify API keys are valid",
+                "Check token expiration",
+                "Review authentication configuration"
+            ]
+        )
+        
+        # Resource errors
+        self.register_strategy(
+            ResourceError,
+            lambda e: [
+                "Check available disk space",
+                "Monitor memory usage with: daglab stats",
+                "Close unnecessary applications",
+                "Increase resource limits in configuration",
+                "Consider using cloud resources"
+            ]
+        )
+        
+        # Timeout errors
+        self.register_strategy(
+            TimeoutError,
+            lambda e: [
+                "Increase timeout in configuration",
+                "Check network latency",
+                "Try during off-peak hours",
+                "Break large operations into smaller chunks",
+                "Use asynchronous execution mode"
+            ]
+        )
+    
+    def register_strategy(
+        self,
+        error_class: Type[DaglabError],
+        strategy_func: callable
+    ):
+        """Register a recovery strategy for an error type."""
+        self._recovery_strategies[error_class] = strategy_func
+    
+    def register_pattern(
+        self,
+        pattern: str,
+        suggestions: List[str]
+    ):
+        """Register recovery suggestions for error message patterns."""
+        import re
+        self._error_patterns[re.compile(pattern, re.IGNORECASE)] = suggestions
+    
+    def get_suggestions(self, error: Exception) -> List[str]:
+        """Get recovery suggestions for an error."""
+        suggestions = []
+        
+        # Check registered strategies
+        if isinstance(error, DaglabError):
+            for error_class, strategy_func in self._recovery_strategies.items():
+                if isinstance(error, error_class):
+                    suggestions.extend(strategy_func(error))
+                    break
+            
+            # Add context-specific suggestions
+            if error.context and error.context.suggestions:
+                suggestions.extend(error.context.suggestions)
+        
+        # Check error message patterns
+        error_msg = str(error)
+        for pattern, pattern_suggestions in self._error_patterns.items():
+            if pattern.search(error_msg):
+                suggestions.extend(pattern_suggestions)
+        
+        # Generic suggestions if none found
+        if not suggestions:
+            suggestions = [
+                "Check the error message for details",
+                "Review recent changes to configuration",
+                "Consult the documentation",
+                "Run with --debug for more information",
+                "Report issue: daglab feedback --error"
+            ]
+        
+        return list(dict.fromkeys(suggestions))  # Remove duplicates
+    
+    def retry_with_backoff(
+        self,
+        func: callable,
+        *args,
+        error_class: Type[Exception] = Exception,
+        **kwargs
+    ):
+        """Retry a function with exponential backoff."""
+        import time
+        
+        last_error = None
+        for attempt in range(self.max_retries):
+            try:
+                return func(*args, **kwargs)
+            except error_class as e:
+                last_error = e
+                if attempt < self.max_retries - 1:
+                    sleep_time = (self.backoff_factor ** attempt) + 0.1
+                    time.sleep(sleep_time)
+        
+        raise last_error
+    
+    def create_error_report(
+        self,
+        error: Exception,
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Create a detailed error report."""
+        import platform
+        import sys
+        import traceback
+        
+        report = {
+            "timestamp": datetime.now().isoformat(),
+            "error": {
+                "type": type(error).__name__,
+                "message": str(error),
+                "traceback": traceback.format_exc(),
+            },
+            "system": {
+                "platform": platform.platform(),
+                "python_version": sys.version,
+                "daglab_version": "0.1.0",  # TODO: Get from package
+            },
+            "context": context or {},
+            "suggestions": self.get_suggestions(error),
+        }
+        
+        if isinstance(error, DaglabError):
+            report["error"]["exit_code"] = error.exit_code.value
+            if error.context:
+                report["error"]["context"] = error.context.to_dict()
+        
+        return report
+    
+    def save_error_report(self, report: Dict[str, Any], filepath: Optional[Path] = None):
+        """Save error report to file."""
+        import json
+        from pathlib import Path
+        
+        if filepath is None:
+            error_dir = Path.home() / ".daglab" / "error_reports"
+            error_dir.mkdir(parents=True, exist_ok=True)
+            
+            timestamp = report["timestamp"].replace(":", "-").replace(".", "-")
+            filepath = error_dir / f"error_{timestamp}.json"
+        
+        with open(filepath, 'w') as f:
+            json.dump(report, f, indent=2)
+        
+        return filepath
+
+
+class ErrorContext(ErrorContext):
+    """Enhanced error context with collection capabilities."""
+    
+    def collect_system_info(self) -> None:
+        """Collect system information for debugging."""
+        import platform
+        import psutil
+        
+        self.details["system"] = {
+            "platform": platform.platform(),
+            "processor": platform.processor(),
+            "cpu_count": psutil.cpu_count(),
+            "memory_gb": psutil.virtual_memory().total / (1024 ** 3),
+            "disk_usage": dict(psutil.disk_usage('/')._asdict()),
+        }
+    
+    def collect_environment(self) -> None:
+        """Collect relevant environment variables."""
+        import os
+        
+        relevant_vars = [
+            var for var in os.environ 
+            if var.startswith(("DAGLAB_", "DAGSTER_", "MARIMO_"))
         ]
-
-
-class DataValidationError(ValidationError):
-    """Raised when data validation fails."""
-    error_code = ErrorCode.VALIDATION_DATA_INVALID
-    default_message = "Data validation failed"
+        
+        self.details["environment"] = {
+            var: os.environ[var] for var in relevant_vars
+        }
     
-    def _get_default_remediation(self) -> List[str]:
-        return [
-            "Check data quality and completeness",
-            "Verify data formats and encodings",
-            "Review validation rules and constraints",
-            "Clean and preprocess data as needed"
-        ]
+    def add_code_context(self, filename: str, line_number: int, context_lines: int = 5):
+        """Add code context around error location."""
+        try:
+            with open(filename, 'r') as f:
+                lines = f.readlines()
+            
+            start = max(0, line_number - context_lines - 1)
+            end = min(len(lines), line_number + context_lines)
+            
+            self.details["code_context"] = {
+                "file": filename,
+                "line": line_number,
+                "snippet": ''.join(lines[start:end]),
+                "start_line": start + 1,
+            }
+        except:
+            pass
 
 
-# Helper functions
-def wrap_error(
-    error: Exception,
-    error_class: type[DaglabError],
-    message: Optional[str] = None,
-    details: Optional[Dict[str, Any]] = None
-) -> DaglabError:
-    """Wrap a standard exception in a DaglabError."""
-    return error_class(
-        message=message or str(error),
-        details=details,
-        cause=error
-    )
+# Global error recovery instance
+error_recovery = ErrorRecovery()
 
 
-def get_error_by_code(error_code: int) -> type[DaglabError]:
-    """Get the error class for a given error code."""
-    # Build a mapping of error codes to classes
-    error_map = {}
-    for subclass in DaglabError.__subclasses__():
-        if hasattr(subclass, 'error_code'):
-            error_map[subclass.error_code.value] = subclass
-        # Check nested subclasses
-        for nested in subclass.__subclasses__():
-            if hasattr(nested, 'error_code'):
-                error_map[nested.error_code.value] = nested
+def with_recovery(func):
+    """Decorator to add automatic error recovery to functions."""
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except DaglabError as e:
+            # Get recovery suggestions
+            suggestions = error_recovery.get_suggestions(e)
+            
+            # Enhance error with suggestions
+            if not e.context.suggestions:
+                e.context.suggestions = suggestions
+            
+            # Re-raise with enhanced context
+            raise
+        except Exception as e:
+            # Wrap in DaglabError with suggestions
+            wrapped = ErrorHandler.wrap_error(
+                e,
+                RuntimeError,
+                context=ErrorContext(
+                    operation=func.__name__,
+                    suggestions=error_recovery.get_suggestions(e)
+                )
+            )
+            raise wrapped
     
-    return error_map.get(error_code, DaglabError)
+    return wrapper

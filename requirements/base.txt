@@ -1,0 +1,14 @@
+# Base requirements for DagLab
+# These are the minimal dependencies required for core functionality
+
+# Core dependencies
+pydantic>=2.5.0
+httpx>=0.26.0
+rich>=13.7.0
+tenacity>=8.2.0
+asyncio-throttle>=1.0.2
+python-dateutil>=2.8.2
+structlog>=24.1.0
+cryptography>=42.0.0
+jsonschema>=4.21.0
+click>=8.1.0

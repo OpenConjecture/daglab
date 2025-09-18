@@ -1,3 +1,0 @@
-# Minimal daglab configuration
-version: "1.0"
-notebooks_dir: "dagster/notebooks"

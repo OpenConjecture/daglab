@@ -1,0 +1,51 @@
+{
+  "ops": {
+    "load_training_data": {
+      "config": {
+        "dataset_path": "${ML_DATASETS_PATH:-/data/ml/datasets}/training.parquet",
+        "validation_split": 0.2,
+        "random_seed": 42
+      }
+    },
+    "preprocess_features": {
+      "config": {
+        "scaling_method": "standard",
+        "handle_missing": "mean",
+        "categorical_encoding": "onehot"
+      }
+    },
+    "train_model": {
+      "config": {
+        "model_type": "random_forest",
+        "hyperparameters": {
+          "n_estimators": 100,
+          "max_depth": 10,
+          "min_samples_split": 5
+        },
+        "cross_validation_folds": 5
+      }
+    },
+    "evaluate_model": {
+      "config": {
+        "metrics": ["accuracy", "precision", "recall", "f1"],
+        "generate_plots": true,
+        "output_dir": "${ML_OUTPUT_DIR:-/tmp/ml_results}"
+      }
+    },
+    "deploy_model": {
+      "config": {
+        "model_registry": "${MODEL_REGISTRY_URL:-http://localhost:5000}",
+        "deployment_name": "production",
+        "min_accuracy_threshold": 0.85
+      }
+    }
+  },
+  "resources": {
+    "mlflow": {
+      "config": {
+        "tracking_uri": "${MLFLOW_TRACKING_URI:-http://localhost:5000}",
+        "experiment_name": "daglab_ml_pipeline"
+      }
+    }
+  }
+}

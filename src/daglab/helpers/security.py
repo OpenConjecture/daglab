@@ -1,587 +1,412 @@
-"""Security utilities for daglab.
+"""Security helpers for safe operations and input handling."""
 
-This module provides security functions for:
-- Input sanitization
-- Path traversal prevention
-- Command injection prevention
-- Safe file operations
-- Security-focused utilities
-"""
-
+import hashlib
+import hmac
 import os
 import re
-import shlex
-import hashlib
 import secrets
-from pathlib import Path
-from typing import Any, List, Optional, Union, Callable
+import shlex
 import subprocess
-import tempfile
-from contextlib import contextmanager
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set, Union
+
+from daglab.helpers.validation import InputSanitizer, PathValidator, ValidationResult
+from daglab.runtime.errors import SecurityError
 
 
-class SecurityError(Exception):
-    """Custom exception for security violations."""
-    pass
-
-
-def sanitize_input(text: str, 
-                  context: str = "general",
-                  max_length: int = 10000,
-                  encoding: str = "utf-8") -> str:
-    """Sanitize input based on context with security focus.
-    
-    Args:
-        text: Input text to sanitize
-        context: Context for sanitization ('general', 'filename', 'command', 'sql')
-        max_length: Maximum allowed length
-        encoding: Expected text encoding
-        
-    Returns:
-        Sanitized string
-        
-    Raises:
-        SecurityError: If input contains dangerous content
-    """
-    if not isinstance(text, str):
-        raise SecurityError("Input must be a string")
-    
-    # Enforce length limit
-    if len(text) > max_length:
-        raise SecurityError(f"Input exceeds maximum length of {max_length}")
-    
-    # Try to decode/encode to catch encoding attacks
-    try:
-        text = text.encode(encoding, errors='strict').decode(encoding, errors='strict')
-    except UnicodeError:
-        raise SecurityError("Input contains invalid encoding")
-    
-    # Remove null bytes (common attack vector)
-    if '\x00' in text:
-        # For general context, we can strip null bytes instead of failing
-        if context == "general":
-            text = text.replace('\x00', '')
-        else:
-            raise SecurityError("Input contains null bytes")
-    
-    # Context-specific sanitization
-    if context == "filename":
-        # Filename sanitization
-        return _sanitize_filename(text)
-    elif context == "command":
-        # Command sanitization
-        return _sanitize_command(text)
-    elif context == "sql":
-        # SQL sanitization (basic - use parameterized queries instead!)
-        return _sanitize_sql(text)
-    else:
-        # General sanitization
-        return _sanitize_general(text)
-
-
-def _sanitize_general(text: str) -> str:
-    """General text sanitization."""
-    # Remove control characters except newline and tab
-    sanitized = ''.join(char for char in text if ord(char) >= 32 or char in '\n\t' or char == '\r')
-    
-    # Remove potential script injections
-    dangerous_patterns = [
-        (r'<script[^>]*>.*?</script>', ''),  # Script tags
-        (r'javascript:', ''),  # JavaScript protocol
-        (r'on\w+\s*=', ''),  # Event handlers
-        (r'<!--.*?-->', ''),  # HTML comments
-        (r'<iframe[^>]*>', ''),  # Iframes
-        (r'<object[^>]*>', ''),  # Objects
-        (r'<embed[^>]*>', ''),  # Embeds
-    ]
-    
-    for pattern, replacement in dangerous_patterns:
-        sanitized = re.sub(pattern, replacement, sanitized, flags=re.IGNORECASE | re.DOTALL)
-    
-    return sanitized.strip()
-
-
-def _sanitize_filename(filename: str) -> str:
-    """Sanitize filename for security."""
-    # Remove path separators
-    filename = filename.replace('/', '').replace('\\', '')
-    
-    # Remove special characters that could be problematic
-    filename = re.sub(r'[<>:"|?*]', '', filename)
-    
-    # Remove leading dots (hidden files)
-    filename = filename.lstrip('.')
-    
-    # Remove shell metacharacters
-    filename = re.sub(r'[$`!]', '', filename)
-    
-    # Limit length
-    if len(filename) > 255:
-        name, ext = os.path.splitext(filename)
-        filename = name[:255-len(ext)] + ext
-    
-    # Ensure non-empty
-    if not filename:
-        raise SecurityError("Filename cannot be empty after sanitization")
-    
-    return filename
-
-
-def _sanitize_command(text: str) -> str:
-    """Sanitize command arguments."""
-    # Use shlex to properly quote
-    try:
-        # This will raise an exception if the string has unmatched quotes
-        shlex.split(text)
-        return shlex.quote(text)
-    except ValueError:
-        raise SecurityError("Command contains unmatched quotes")
-
-
-def _sanitize_sql(text: str) -> str:
-    """Basic SQL sanitization (prefer parameterized queries!)."""
-    # Remove SQL comments
-    text = re.sub(r'--.*$', '', text, flags=re.MULTILINE)
-    text = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
-    
-    # Escape single quotes
-    text = text.replace("'", "''")
-    
-    # Remove potentially dangerous keywords (very basic)
-    dangerous_keywords = [
-        'EXEC', 'EXECUTE', 'INSERT', 'UPDATE', 'DELETE', 'DROP',
-        'CREATE', 'ALTER', 'GRANT', 'REVOKE', 'UNION', 'SCRIPT'
-    ]
-    
-    for keyword in dangerous_keywords:
-        if re.search(rf'\b{keyword}\b', text, re.IGNORECASE):
-            raise SecurityError(f"SQL contains potentially dangerous keyword: {keyword}")
-    
-    return text
-
-
-def sanitize_path(path: Union[str, Path]) -> Path:
-    """Sanitize a file path for security.
-    
-    Args:
-        path: Path to sanitize
-        
-    Returns:
-        Sanitized Path object
-        
-    Raises:
-        SecurityError: If path contains dangerous elements
-    """
-    if not path:
-        raise SecurityError("Path cannot be empty")
-    
-    path_str = str(path)
-    
-    # Check for null bytes
-    if '\x00' in path_str:
-        raise SecurityError("Path contains null bytes")
-    
-    # Remove multiple slashes
-    path_str = re.sub(r'/+', '/', path_str)
-    path_str = re.sub(r'\\\\+', r'\\', path_str)
-    
-    # Check for dangerous patterns
-    dangerous_patterns = [
-        r'\.\./',  # Parent directory traversal
-        r'\.\.\\',  # Parent directory traversal (Windows)
-        r'^~',  # Home directory expansion
-        r'\$\{',  # Variable expansion
-        r'\$\(',  # Command substitution
-        r'`',  # Command substitution
-        r'<', r'>',  # Redirection
-        r'\|',  # Pipe
-        r'&',  # Background/and
-        r';',  # Command separator
-    ]
-    
-    for pattern in dangerous_patterns:
-        if re.search(pattern, path_str):
-            raise SecurityError(f"Path contains dangerous pattern: {pattern}")
-    
-    # Convert to Path object and resolve
-    try:
-        sanitized_path = Path(path_str).resolve()
-    except (ValueError, OSError) as e:
-        raise SecurityError(f"Invalid path: {str(e)}")
-    
-    return sanitized_path
-
-
-def prevent_path_traversal(path: Union[str, Path], 
-                          base_dir: Union[str, Path],
-                          follow_symlinks: bool = False) -> Path:
-    """Prevent path traversal attacks by ensuring path is within base directory.
-    
-    Args:
-        path: Path to check
-        base_dir: Base directory that path must be within
-        follow_symlinks: Whether to follow symbolic links
-        
-    Returns:
-        Validated absolute path
-        
-    Raises:
-        SecurityError: If path traversal is detected
-    """
-    # Sanitize both paths
-    safe_path = sanitize_path(path)
-    safe_base = sanitize_path(base_dir)
-    
-    # Resolve to absolute paths
-    abs_base = safe_base.resolve()
-    
-    # Handle symlinks
-    if follow_symlinks:
-        abs_path = safe_path.resolve()
-    else:
-        # Resolve path without following symlinks in the final component
-        abs_path = safe_path.resolve(strict=False)
-        if abs_path.is_symlink():
-            raise SecurityError("Path contains symbolic link (symlinks disabled)")
-    
-    # Check if path is within base directory
-    try:
-        abs_path.relative_to(abs_base)
-    except ValueError:
-        raise SecurityError(f"Path traversal detected: {path} is outside {base_dir}")
-    
-    # Additional check for symlink pointing outside base
-    if abs_path.exists() and abs_path.is_symlink():
-        link_target = abs_path.readlink()
-        if link_target.is_absolute():
-            try:
-                link_target.relative_to(abs_base)
-            except ValueError:
-                raise SecurityError("Symlink points outside base directory")
-    
-    return abs_path
-
-
-def prevent_command_injection(command: str, 
-                            allowed_commands: Optional[List[str]] = None,
-                            allow_shell: bool = False) -> List[str]:
-    """Prevent command injection by validating and sanitizing commands.
-    
-    Args:
-        command: Command string to validate
-        allowed_commands: List of allowed command names
-        allow_shell: Whether to allow shell execution (dangerous!)
-        
-    Returns:
-        List of command arguments suitable for subprocess
-        
-    Raises:
-        SecurityError: If command injection is detected
-    """
-    if not command or not isinstance(command, str):
-        raise SecurityError("Command must be a non-empty string")
-    
-    # Check for obvious injection attempts
-    dangerous_chars = ['&', '|', ';', '\n', '\r', '$', '`', '(', ')', '<', '>', '{', '}']
-    if not allow_shell:
-        for char in dangerous_chars:
-            if char in command:
-                raise SecurityError(f"Command contains dangerous character: {char}")
-    
-    # Parse command safely
-    try:
-        args = shlex.split(command)
-    except ValueError as e:
-        raise SecurityError(f"Invalid command format: {str(e)}")
-    
-    if not args:
-        raise SecurityError("Empty command after parsing")
-    
-    # Validate command name
-    cmd_name = args[0]
-    
-    # Check if command is in allowed list
-    if allowed_commands and cmd_name not in allowed_commands:
-        raise SecurityError(f"Command '{cmd_name}' not in allowed list")
-    
-    # Additional checks for dangerous commands
-    dangerous_commands = [
-        'eval', 'exec', 'sh', 'bash', 'zsh', 'fish', 'cmd', 'powershell',
-        'python', 'perl', 'ruby', 'php', 'node', 'nc', 'netcat', 'curl',
-        'wget', 'ssh', 'telnet', 'rm', 'dd', 'format', 'mkfs'
-    ]
-    
-    if cmd_name.lower() in dangerous_commands and not allowed_commands:
-        raise SecurityError(f"Potentially dangerous command: {cmd_name}")
-    
-    # Validate arguments
-    for arg in args[1:]:
-        # Check for argument injection
-        if arg.startswith('-') and '=' in arg:
-            # Could be trying to inject via --option=value
-            key, value = arg.split('=', 1)
-            if any(char in value for char in dangerous_chars):
-                raise SecurityError(f"Dangerous character in argument value: {arg}")
-    
-    return args
-
-
-@contextmanager
-def safe_temp_file(suffix: Optional[str] = None, 
-                  prefix: Optional[str] = None,
-                  dir: Optional[Union[str, Path]] = None):
-    """Create a secure temporary file.
-    
-    Args:
-        suffix: File suffix
-        prefix: File prefix
-        dir: Directory for temp file (must be validated separately)
-        
-    Yields:
-        Path to temporary file
-    """
-    # Validate directory if provided
-    if dir:
-        dir = prevent_path_traversal(dir, dir)
-    
-    # Create secure temporary file
-    fd, path = tempfile.mkstemp(suffix=suffix, prefix=prefix, dir=dir)
-    temp_path = Path(path)
-    
-    try:
-        os.close(fd)  # Close the file descriptor
-        yield temp_path
-    finally:
-        # Secure deletion
-        if temp_path.exists():
-            # Overwrite with random data before deletion (optional, for sensitive data)
-            if temp_path.is_file():
-                with open(temp_path, 'wb') as f:
-                    f.write(secrets.token_bytes(min(1024, temp_path.stat().st_size)))
-            temp_path.unlink()
-
-
-def safe_file_read(path: Union[str, Path], 
-                  base_dir: Optional[Union[str, Path]] = None,
-                  max_size: int = 100 * 1024 * 1024,  # 100MB default
-                  encoding: str = 'utf-8') -> str:
-    """Safely read a file with security checks.
-    
-    Args:
-        path: File path to read
-        base_dir: Base directory to restrict reading to
-        max_size: Maximum file size in bytes
-        encoding: File encoding
-        
-    Returns:
-        File contents as string
-        
-    Raises:
-        SecurityError: If file access is unsafe
-    """
-    # Validate path
-    if base_dir:
-        safe_path = prevent_path_traversal(path, base_dir)
-    else:
-        safe_path = sanitize_path(path)
-    
-    # Check if file exists and is a regular file
-    if not safe_path.exists():
-        raise SecurityError(f"File does not exist: {safe_path}")
-    if not safe_path.is_file():
-        raise SecurityError(f"Path is not a regular file: {safe_path}")
-    
-    # Check file size
-    file_size = safe_path.stat().st_size
-    if file_size > max_size:
-        raise SecurityError(f"File too large: {file_size} bytes (max: {max_size})")
-    
-    # Check if file is readable
-    if not os.access(safe_path, os.R_OK):
-        raise SecurityError(f"File is not readable: {safe_path}")
-    
-    # Read file safely
-    try:
-        with open(safe_path, 'r', encoding=encoding) as f:
-            contents = f.read()
-    except UnicodeDecodeError:
-        raise SecurityError(f"File has invalid {encoding} encoding")
-    except Exception as e:
-        raise SecurityError(f"Error reading file: {str(e)}")
-    
-    return contents
-
-
-def safe_file_write(path: Union[str, Path],
-                   content: str,
-                   base_dir: Optional[Union[str, Path]] = None,
-                   overwrite: bool = False,
-                   mode: int = 0o644,
-                   encoding: str = 'utf-8') -> Path:
-    """Safely write to a file with security checks.
-    
-    Args:
-        path: File path to write to
-        content: Content to write
-        base_dir: Base directory to restrict writing to
-        overwrite: Whether to overwrite existing files
-        mode: File permissions (Unix)
-        encoding: File encoding
-        
-    Returns:
-        Path to written file
-        
-    Raises:
-        SecurityError: If file write is unsafe
-    """
-    # Validate path
-    if base_dir:
-        safe_path = prevent_path_traversal(path, base_dir)
-    else:
-        safe_path = sanitize_path(path)
-    
-    # Check if file exists
-    if safe_path.exists() and not overwrite:
-        raise SecurityError(f"File already exists: {safe_path}")
-    
-    # Ensure parent directory exists
-    safe_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Write file atomically using a temporary file
-    temp_fd, temp_path = tempfile.mkstemp(
-        dir=safe_path.parent,
-        prefix=f".{safe_path.name}.",
-        suffix=".tmp"
-    )
-    
-    try:
-        # Write content to temporary file
-        with os.fdopen(temp_fd, 'w', encoding=encoding) as f:
-            f.write(content)
-        
-        # Set proper permissions
-        os.chmod(temp_path, mode)
-        
-        # Atomic move (rename) to final location
-        Path(temp_path).replace(safe_path)
-        
-    except Exception as e:
-        # Clean up temporary file on error
-        try:
-            os.unlink(temp_path)
-        except:
-            pass
-        raise SecurityError(f"Error writing file: {str(e)}")
-    
-    return safe_path
-
-
-def hash_password(password: str, salt: Optional[bytes] = None) -> tuple[str, bytes]:
-    """Securely hash a password using PBKDF2.
-    
-    Args:
-        password: Password to hash
-        salt: Optional salt (will generate if not provided)
-        
-    Returns:
-        Tuple of (hash_hex, salt)
-    """
-    if not password:
-        raise SecurityError("Password cannot be empty")
-    
-    # Generate salt if not provided
-    if salt is None:
-        salt = secrets.token_bytes(32)
-    
-    # Hash password using PBKDF2 with SHA256
-    key = hashlib.pbkdf2_hmac(
-        'sha256',
-        password.encode('utf-8'),
-        salt,
-        iterations=100000  # OWASP recommendation
-    )
-    
-    return key.hex(), salt
-
-
-def verify_password(password: str, hash_hex: str, salt: bytes) -> bool:
-    """Verify a password against a hash.
-    
-    Args:
-        password: Password to verify
-        hash_hex: Expected hash in hex format
-        salt: Salt used for hashing
-        
-    Returns:
-        True if password matches, False otherwise
-    """
-    calculated_hash, _ = hash_password(password, salt)
-    
-    # Use constant-time comparison to prevent timing attacks
-    return secrets.compare_digest(calculated_hash, hash_hex)
-
-
-def generate_secure_token(length: int = 32) -> str:
-    """Generate a cryptographically secure random token.
-    
-    Args:
-        length: Token length in bytes
-        
-    Returns:
-        URL-safe token string
-    """
-    return secrets.token_urlsafe(length)
-
-
-def run_command_safely(args: List[str],
-                      timeout: int = 30,
-                      cwd: Optional[Union[str, Path]] = None,
-                      env: Optional[dict] = None,
-                      capture_output: bool = True) -> subprocess.CompletedProcess:
-    """Run a command safely with security restrictions.
-    
-    Args:
-        args: Command arguments (already validated)
-        timeout: Command timeout in seconds
-        cwd: Working directory (will be validated)
-        env: Environment variables (filtered)
-        capture_output: Whether to capture output
-        
-    Returns:
-        CompletedProcess instance
-        
-    Raises:
-        SecurityError: If command execution is unsafe
-    """
-    # Validate working directory
-    if cwd:
-        cwd = prevent_path_traversal(cwd, cwd)
-    
-    # Filter environment variables
-    if env:
-        # Remove potentially dangerous environment variables
-        dangerous_vars = [
+class SecurityManager:
+    """Central security management for Daglab operations."""
+    
+    def __init__(self, strict_mode: bool = True):
+        self.strict_mode = strict_mode
+        self._trusted_commands = {
+            'ls', 'cat', 'echo', 'grep', 'find', 'head', 'tail',
+            'wc', 'sort', 'uniq', 'cut', 'awk', 'sed'
+        }
+        self._forbidden_env_vars = {
             'LD_PRELOAD', 'LD_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES',
-            'DYLD_LIBRARY_PATH', 'PYTHONPATH', 'PERL5LIB', 'RUBYLIB',
-            'NODE_PATH', 'CLASSPATH'
-        ]
-        filtered_env = {k: v for k, v in env.items() 
-                       if k not in dangerous_vars}
-    else:
-        filtered_env = None
+            'PATH', 'PYTHONPATH', 'HOME', 'USER'
+        }
     
-    try:
-        result = subprocess.run(
-            args,
-            timeout=timeout,
-            cwd=cwd,
-            env=filtered_env,
-            capture_output=capture_output,
-            text=True,
-            shell=False  # Never use shell
+    def sanitize_command(self, command: Union[str, List[str]]) -> List[str]:
+        """Sanitize a command for safe execution."""
+        if isinstance(command, str):
+            # Use shlex to safely split the command
+            try:
+                parts = shlex.split(command)
+            except ValueError as e:
+                raise SecurityError(f"Invalid command syntax: {e}")
+        else:
+            parts = list(command)
+        
+        if not parts:
+            raise SecurityError("Empty command")
+        
+        # Check if command is in trusted list
+        cmd_name = Path(parts[0]).name
+        if self.strict_mode and cmd_name not in self._trusted_commands:
+            raise SecurityError(
+                f"Command '{cmd_name}' not in trusted command list",
+                context=ErrorContext(
+                    suggestions=[
+                        f"Use one of the trusted commands: {', '.join(sorted(self._trusted_commands))}",
+                        "Disable strict mode if you need to run arbitrary commands"
+                    ]
+                )
+            )
+        
+        # Sanitize each argument
+        sanitized = []
+        for part in parts:
+            # Check for command injection attempts
+            if any(char in part for char in ';|&`$(){}[]<>'):
+                if self.strict_mode:
+                    raise SecurityError(f"Potentially dangerous characters in argument: {part}")
+                # In non-strict mode, quote the argument
+                part = shlex.quote(part)
+            sanitized.append(part)
+        
+        return sanitized
+    
+    def safe_subprocess_run(
+        self,
+        command: Union[str, List[str]],
+        env: Optional[Dict[str, str]] = None,
+        cwd: Optional[Path] = None,
+        timeout: Optional[float] = None,
+        **kwargs
+    ) -> subprocess.CompletedProcess:
+        """Safely run a subprocess with security checks."""
+        # Sanitize command
+        command = self.sanitize_command(command)
+        
+        # Validate working directory
+        if cwd:
+            result = PathValidator.validate_path(cwd, must_exist=True, file_type='dir')
+            if not result.valid:
+                raise SecurityError(f"Invalid working directory: {', '.join(result.errors)}")
+        
+        # Sanitize environment
+        if env:
+            env = self.sanitize_environment(env)
+        
+        # Set secure defaults
+        kwargs.setdefault('shell', False)  # Never use shell=True
+        kwargs.setdefault('check', True)
+        
+        try:
+            return subprocess.run(
+                command,
+                env=env,
+                cwd=cwd,
+                timeout=timeout,
+                capture_output=True,
+                text=True,
+                **kwargs
+            )
+        except subprocess.TimeoutExpired:
+            raise SecurityError(f"Command timed out after {timeout} seconds")
+        except subprocess.CalledProcessError as e:
+            raise SecurityError(
+                f"Command failed with exit code {e.returncode}",
+                cause=e,
+                context=ErrorContext(
+                    details={
+                        'stdout': e.stdout,
+                        'stderr': e.stderr
+                    }
+                )
+            )
+    
+    def sanitize_environment(self, env: Dict[str, str]) -> Dict[str, str]:
+        """Sanitize environment variables."""
+        sanitized = {}
+        
+        for key, value in env.items():
+            # Check for forbidden variables
+            if key.upper() in self._forbidden_env_vars:
+                if self.strict_mode:
+                    raise SecurityError(f"Forbidden environment variable: {key}")
+                continue
+            
+            # Sanitize key
+            if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', key):
+                raise SecurityError(f"Invalid environment variable name: {key}")
+            
+            # Sanitize value
+            if isinstance(value, str):
+                # Remove null bytes
+                value = value.replace('\x00', '')
+                # Limit length
+                if len(value) > 32768:  # 32KB limit
+                    value = value[:32768]
+            
+            sanitized[key] = str(value)
+        
+        return sanitized
+
+
+class PathTraversalPrevention:
+    """Prevent path traversal attacks."""
+    
+    @staticmethod
+    def safe_join(base_path: Path, *paths: Union[str, Path]) -> Path:
+        """Safely join paths preventing traversal attacks."""
+        base_path = Path(base_path).resolve()
+        
+        # Join all paths
+        joined = base_path
+        for p in paths:
+            # Remove any leading slashes to prevent absolute paths
+            p = str(p).lstrip('/')
+            joined = joined / p
+        
+        # Resolve and check if still under base path
+        resolved = joined.resolve()
+        
+        try:
+            resolved.relative_to(base_path)
+        except ValueError:
+            raise SecurityError(
+                f"Path traversal detected: {joined} -> {resolved}",
+                context=ErrorContext(
+                    details={
+                        'base_path': str(base_path),
+                        'attempted_path': str(joined),
+                        'resolved_path': str(resolved)
+                    }
+                )
+            )
+        
+        return resolved
+    
+    @staticmethod
+    def is_safe_path(path: Path, base_path: Path) -> bool:
+        """Check if a path is safe (within base_path)."""
+        try:
+            path.resolve().relative_to(base_path.resolve())
+            return True
+        except ValueError:
+            return False
+
+
+class FileOperationSecurity:
+    """Secure file operations."""
+    
+    def __init__(self, base_path: Optional[Path] = None):
+        self.base_path = base_path
+    
+    def safe_read(self, file_path: Union[str, Path], mode: str = 'r') -> str:
+        """Safely read a file with security checks."""
+        file_path = Path(file_path)
+        
+        # Validate path
+        if self.base_path:
+            file_path = PathTraversalPrevention.safe_join(self.base_path, file_path)
+        
+        result = PathValidator.validate_path(
+            file_path,
+            base_dir=self.base_path,
+            must_exist=True,
+            file_type='file'
         )
-        return result
-    except subprocess.TimeoutExpired:
-        raise SecurityError(f"Command timed out after {timeout} seconds")
-    except Exception as e:
-        raise SecurityError(f"Command execution failed: {str(e)}")
+        
+        if not result.valid:
+            raise SecurityError(f"Invalid file path: {', '.join(result.errors)}")
+        
+        # Check file size before reading
+        max_size = 100 * 1024 * 1024  # 100MB
+        if file_path.stat().st_size > max_size:
+            raise SecurityError(f"File too large: {file_path}")
+        
+        # Read file
+        try:
+            with open(file_path, mode) as f:
+                return f.read()
+        except Exception as e:
+            raise SecurityError(f"Failed to read file: {e}", cause=e)
+    
+    def safe_write(
+        self,
+        file_path: Union[str, Path],
+        content: Union[str, bytes],
+        mode: str = 'w',
+        create_parents: bool = False
+    ) -> None:
+        """Safely write to a file with security checks."""
+        file_path = Path(file_path)
+        
+        # Validate path
+        if self.base_path:
+            file_path = PathTraversalPrevention.safe_join(self.base_path, file_path)
+        
+        # Create parent directories if requested
+        if create_parents:
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        result = PathValidator.validate_path(
+            file_path,
+            base_dir=self.base_path,
+            file_type='file' if file_path.exists() else None
+        )
+        
+        if not result.valid:
+            raise SecurityError(f"Invalid file path: {', '.join(result.errors)}")
+        
+        # Write file with atomic operation
+        temp_path = file_path.with_suffix(file_path.suffix + '.tmp')
+        try:
+            with open(temp_path, mode) as f:
+                f.write(content)
+            
+            # Atomic rename
+            temp_path.replace(file_path)
+        except Exception as e:
+            # Clean up temp file
+            if temp_path.exists():
+                temp_path.unlink()
+            raise SecurityError(f"Failed to write file: {e}", cause=e)
+    
+    def safe_delete(self, file_path: Union[str, Path]) -> None:
+        """Safely delete a file with security checks."""
+        file_path = Path(file_path)
+        
+        # Validate path
+        if self.base_path:
+            file_path = PathTraversalPrevention.safe_join(self.base_path, file_path)
+        
+        result = PathValidator.validate_path(
+            file_path,
+            base_dir=self.base_path,
+            must_exist=True
+        )
+        
+        if not result.valid:
+            raise SecurityError(f"Invalid file path: {', '.join(result.errors)}")
+        
+        try:
+            if file_path.is_dir():
+                file_path.rmdir()  # Only removes empty directories
+            else:
+                file_path.unlink()
+        except Exception as e:
+            raise SecurityError(f"Failed to delete file: {e}", cause=e)
+
+
+class EnvironmentSecurity:
+    """Secure environment variable handling."""
+    
+    # Environment variables that may contain sensitive data
+    SENSITIVE_VARS = {
+        'PASSWORD', 'TOKEN', 'SECRET', 'KEY', 'AUTH',
+        'CREDENTIAL', 'PRIVATE', 'API_KEY', 'ACCESS_TOKEN'
+    }
+    
+    @classmethod
+    def get_safe_env(
+        cls,
+        key: str,
+        default: Optional[str] = None,
+        required: bool = False
+    ) -> Optional[str]:
+        """Safely get environment variable."""
+        # Validate key
+        if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', key):
+            raise SecurityError(f"Invalid environment variable name: {key}")
+        
+        value = os.environ.get(key, default)
+        
+        if required and value is None:
+            raise SecurityError(
+                f"Required environment variable not set: {key}",
+                context=ErrorContext(
+                    suggestions=[f"Set the {key} environment variable"]
+                )
+            )
+        
+        return value
+    
+    @classmethod
+    def mask_sensitive_env(cls, env_dict: Dict[str, str]) -> Dict[str, str]:
+        """Mask sensitive environment variables for logging."""
+        masked = {}
+        
+        for key, value in env_dict.items():
+            # Check if key contains sensitive patterns
+            key_upper = key.upper()
+            is_sensitive = any(pattern in key_upper for pattern in cls.SENSITIVE_VARS)
+            
+            if is_sensitive and value:
+                # Show first and last 2 characters only
+                if len(value) > 4:
+                    masked[key] = f"{value[:2]}...{value[-2:]}"
+                else:
+                    masked[key] = "***"
+            else:
+                masked[key] = value
+        
+        return masked
+
+
+class CryptoUtils:
+    """Cryptographic utilities for Daglab."""
+    
+    @staticmethod
+    def generate_token(length: int = 32) -> str:
+        """Generate a secure random token."""
+        return secrets.token_urlsafe(length)
+    
+    @staticmethod
+    def hash_password(password: str, salt: Optional[bytes] = None) -> tuple[str, bytes]:
+        """Hash a password using PBKDF2."""
+        if salt is None:
+            salt = secrets.token_bytes(32)
+        
+        key = hashlib.pbkdf2_hmac(
+            'sha256',
+            password.encode('utf-8'),
+            salt,
+            100000  # iterations
+        )
+        
+        return key.hex(), salt
+    
+    @staticmethod
+    def verify_password(password: str, key_hex: str, salt: bytes) -> bool:
+        """Verify a password against a hash."""
+        computed_key, _ = CryptoUtils.hash_password(password, salt)
+        return hmac.compare_digest(computed_key, key_hex)
+    
+    @staticmethod
+    def hash_file(file_path: Path, algorithm: str = 'sha256') -> str:
+        """Calculate hash of a file."""
+        hasher = hashlib.new(algorithm)
+        
+        with open(file_path, 'rb') as f:
+            while chunk := f.read(8192):
+                hasher.update(chunk)
+        
+        return hasher.hexdigest()
+
+
+# Default security manager instance
+default_security_manager = SecurityManager(strict_mode=True)
+
+
+# Convenience functions
+def sanitize_input(value: str, **kwargs) -> str:
+    """Sanitize user input."""
+    return InputSanitizer.sanitize_string(value, **kwargs)
+
+
+def safe_path_join(base: Path, *parts: Union[str, Path]) -> Path:
+    """Safely join paths."""
+    return PathTraversalPrevention.safe_join(base, *parts)
+
+
+def run_command_safely(command: Union[str, List[str]], **kwargs) -> subprocess.CompletedProcess:
+    """Run a command safely."""
+    return default_security_manager.safe_subprocess_run(command, **kwargs)
+
+
+from daglab.runtime.errors import ErrorContext

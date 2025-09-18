@@ -1,0 +1,315 @@
+{% extends "notebook_base.ipynb.j2" %}
+
+{% block imports %}
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "# Pipeline imports\n",
+        "import os\n",
+        "import sys\n",
+        "from pathlib import Path\n",
+        "from datetime import datetime, timedelta\n",
+        "import logging\n",
+        "\n",
+        "# Data processing imports\n",
+        {% for import in imports %}
+        "{{ import }}\n"{% if not loop.last %},{% endif %}
+        {% endfor %}
+      ]
+    },
+{% endblock %}
+
+{% block content %}
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## Data Pipeline: {{ metadata.name }}\n",
+        "\n",
+        "This notebook implements a data processing pipeline with the following stages:\n",
+        "\n",
+        {% if custom.pipeline_stages %}
+        {% for stage in custom.pipeline_stages %}
+        "- {{ stage.name }}: {{ stage.description }}\n",
+        {% endfor %}
+        {% else %}
+        "- Extract: Load data from source\n",
+        "- Transform: Apply data transformations\n",
+        "- Load: Save processed data\n",
+        {% endif %}
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "# Configure logging\n",
+        "logging.basicConfig(\n",
+        "    level=logging.INFO,\n",
+        "    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'\n",
+        ")\n",
+        "logger = logging.getLogger('{{ metadata.name | slugify }}')\n",
+        "\n",
+        "# Pipeline configuration\n",
+        "PIPELINE_CONFIG = {\n",
+        {% for key, value in custom.pipeline_config.items() if custom.pipeline_config %}
+        "    '{{ key }}': {{ value | to_json }},\n",
+        {% endfor %}
+        "    'run_date': datetime.now().strftime('%Y-%m-%d'),\n",
+        "    'pipeline_name': '{{ metadata.name | slugify }}'\n",
+        "}"
+      ]
+    },
+    {% if custom.data_sources %}
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "### Data Sources\n",
+        "\n",
+        "Configure connections to data sources."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "# Data source configuration\n",
+        "DATA_SOURCES = {\n",
+        {% for source in custom.data_sources %}
+        "    '{{ source.name }}': {\n",
+        "        'type': '{{ source.type }}',\n",
+        "        'path': '{{ source.path }}',\n",
+        {% if source.format %}
+        "        'format': '{{ source.format }}',\n",
+        {% endif %}
+        {% if source.options %}
+        "        'options': {{ source.options | to_json }},\n",
+        {% endif %}
+        "    },\n",
+        {% endfor %}
+        "}"
+      ]
+    },
+    {% endif %}
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "### Extract Stage\n",
+        "\n",
+        "Load data from configured sources."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "def extract_data(sources: dict) -> dict:\n",
+        "    \"\"\"Extract data from configured sources.\"\"\"\n",
+        "    logger.info('Starting data extraction')\n",
+        "    datasets = {}\n",
+        "    \n",
+        "    for source_name, config in sources.items():\n",
+        "        try:\n",
+        "            logger.info(f'Loading {source_name} from {config[\"type\"]}')\n",
+        "            \n",
+        "            if config['type'] == 'csv':\n",
+        "                df = pd.read_csv(config['path'], **config.get('options', {}))\n",
+        "            elif config['type'] == 'parquet':\n",
+        "                df = pd.read_parquet(config['path'], **config.get('options', {}))\n",
+        "            elif config['type'] == 'json':\n",
+        "                df = pd.read_json(config['path'], **config.get('options', {}))\n",
+        "            else:\n",
+        "                logger.warning(f'Unsupported source type: {config[\"type\"]}')\n",
+        "                continue\n",
+        "            \n",
+        "            datasets[source_name] = df\n",
+        "            logger.info(f'Loaded {len(df)} records from {source_name}')\n",
+        "            \n",
+        "        except Exception as e:\n",
+        "            logger.error(f'Failed to load {source_name}: {str(e)}')\n",
+        "            raise\n",
+        "    \n",
+        "    return datasets\n",
+        "\n",
+        "# Execute extraction\n",
+        {% if custom.data_sources %}
+        "extracted_data = extract_data(DATA_SOURCES)\n",
+        {% else %}
+        "# Configure your data sources in the template\n",
+        "extracted_data = {}\n",
+        {% endif %}
+        "print(f'Extracted {len(extracted_data)} datasets')"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "### Transform Stage\n",
+        "\n",
+        "Apply data transformations and business logic."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "def transform_data(datasets: dict, config: dict) -> pd.DataFrame:\n",
+        "    \"\"\"Apply transformations to extracted data.\"\"\"\n",
+        "    logger.info('Starting data transformation')\n",
+        "    \n",
+        {% if custom.transformations %}
+        "    # Apply custom transformations\n",
+        {% for transform in custom.transformations %}
+        "    # {{ transform.description }}\n",
+        "    {{ transform.code | indent_code }}\n",
+        "    \n",
+        {% endfor %}
+        {% else %}
+        "    # TODO: Implement your transformation logic here\n",
+        "    transformed_df = pd.DataFrame()  # Replace with actual transformation\n",
+        {% endif %}
+        "    \n",
+        "    logger.info(f'Transformation complete: {len(transformed_df)} records')\n",
+        "    return transformed_df\n",
+        "\n",
+        "# Execute transformation\n",
+        "transformed_data = transform_data(extracted_data, PIPELINE_CONFIG)"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "# Data quality checks\n",
+        "def validate_data(df: pd.DataFrame) -> dict:\n",
+        "    \"\"\"Perform data quality validations.\"\"\"\n",
+        "    validations = {\n",
+        "        'row_count': len(df),\n",
+        "        'column_count': len(df.columns),\n",
+        "        'null_counts': df.isnull().sum().to_dict(),\n",
+        "        'duplicates': df.duplicated().sum(),\n",
+        "    }\n",
+        "    \n",
+        {% if custom.validations %}
+        "    # Custom validations\n",
+        {% for validation in custom.validations %}
+        "    validations['{{ validation.name }}'] = {{ validation.code }}\n",
+        {% endfor %}
+        {% endif %}
+        "    \n",
+        "    return validations\n",
+        "\n",
+        "# Run validations\n",
+        "quality_report = validate_data(transformed_data)\n",
+        "print('Data Quality Report:')\n",
+        "for metric, value in quality_report.items():\n",
+        "    print(f'  {metric}: {value}')"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "### Load Stage\n",
+        "\n",
+        "Save processed data to target destination."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "def load_data(df: pd.DataFrame, output_config: dict) -> None:\n",
+        "    \"\"\"Load transformed data to target destination.\"\"\"\n",
+        "    logger.info('Starting data load')\n",
+        "    \n",
+        {% if outputs %}
+        {% for output_name, output_path in outputs.items() %}
+        "    # Save {{ output_name }}\n",
+        "    output_path = Path('{{ output_path }}')\n",
+        "    output_path.parent.mkdir(parents=True, exist_ok=True)\n",
+        "    \n",
+        {% if output_path.endswith('.csv') %}
+        "    df.to_csv(output_path, index=False)\n",
+        {% elif output_path.endswith('.parquet') %}
+        "    df.to_parquet(output_path, index=False)\n",
+        {% elif output_path.endswith('.json') %}
+        "    df.to_json(output_path, orient='records', indent=2)\n",
+        {% else %}
+        "    # Save as CSV by default\n",
+        "    df.to_csv(output_path, index=False)\n",
+        {% endif %}
+        "    logger.info(f'Saved {{ output_name }} to {output_path}')\n",
+        "    \n",
+        {% endfor %}
+        {% else %}
+        "    # TODO: Configure output destinations\n",
+        "    logger.warning('No output destinations configured')\n",
+        {% endif %}
+        "\n",
+        "# Execute load\n",
+        "load_data(transformed_data, PIPELINE_CONFIG)"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "### Pipeline Summary\n",
+        "\n",
+        "Generate execution summary and metrics."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "# Pipeline execution summary\n",
+        "pipeline_summary = {\n",
+        "    'pipeline_name': PIPELINE_CONFIG['pipeline_name'],\n",
+        "    'run_date': PIPELINE_CONFIG['run_date'],\n",
+        "    'status': 'completed',\n",
+        "    'records_processed': len(transformed_data),\n",
+        "    'quality_metrics': quality_report,\n",
+        "    'execution_time': datetime.now().isoformat(),\n",
+        "}\n",
+        "\n",
+        "print('\\nPipeline Execution Summary:')\n",
+        "print('=' * 50)\n",
+        "for key, value in pipeline_summary.items():\n",
+        "    if isinstance(value, dict):\n",
+        "        print(f'{key}:')\n",
+        "        for sub_key, sub_value in value.items():\n",
+        "            print(f'  {sub_key}: {sub_value}')\n",
+        "    else:\n",
+        "        print(f'{key}: {value}')\n",
+        "\n",
+        "# Save summary report\n",
+        "import json\n",
+        "summary_path = Path('{{ custom.summary_path | default(\"pipeline_summary.json\") }}')\n",
+        "with open(summary_path, 'w') as f:\n",
+        "    json.dump(pipeline_summary, f, indent=2)\n",
+        "print(f'\\nSummary saved to: {summary_path}')"
+      ]
+    }
+{% endblock %}

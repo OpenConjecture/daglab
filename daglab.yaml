@@ -1,0 +1,66 @@
+# DagLab Configuration File
+# This file configures the behavior of daglab commands
+
+project:
+  name: daglab
+  version: 0.1.0
+  description: Unified platform for Dagster and Marimo orchestration
+
+dagster:
+  # Dagster webserver configuration
+  port: 3000
+  host: localhost
+  
+  # Dagster home directory
+  home: ./dagster_home
+  
+  # GraphQL endpoint for API access
+  graphql_endpoint: http://localhost:3000/graphql
+  
+  # Auto-reload on code changes
+  auto_reload: true
+  
+  # Workspace configuration
+  workspace:
+    python_file: workspace.py
+    
+marimo:
+  # Marimo server configuration
+  port: 2718
+  host: localhost
+  
+  # Notebook directory
+  notebooks_dir: ./notebooks
+  
+  # Auto-save interval (seconds)
+  autosave_interval: 30
+  
+  # Theme settings
+  theme: auto  # auto, light, dark
+  
+# Development settings
+development:
+  # Enable debug mode
+  debug: true
+  
+  # Log level
+  log_level: INFO
+  
+  # Hot reload
+  hot_reload: true
+
+# Storage configuration
+storage:
+  # Default storage backend
+  backend: local
+  
+  # Local storage path
+  local_path: ./storage
+  
+# Security settings
+security:
+  # Enable authentication
+  auth_enabled: false
+  
+  # Session timeout (minutes)
+  session_timeout: 60

@@ -1,0 +1,114 @@
+{
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "# {{ metadata.name }}\n",
+        "\n",
+        "{{ metadata.description }}\n",
+        "\n",
+        "**Author**: {{ metadata.author }}  \n",
+        "**Created**: {{ metadata.created_at | format_date('%Y-%m-%d %H:%M') }}  \n",
+        "{% if metadata.tags %}**Tags**: {{ metadata.tags | join(', ') }}{% endif %}"
+      ]
+    },
+    {% block imports %}
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        {% for import in imports %}
+        "{{ import }}\n"{% if not loop.last %},{% endif %}
+        {% endfor %}
+      ]
+    },
+    {% endblock %}
+    {% block parameters %}
+    {% if parameters %}
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## Parameters"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "tags": ["parameters"]
+      },
+      "outputs": [],
+      "source": [
+        {% for param, value in parameters.items() %}
+        "{{ param }} = {{ value | to_json }}\n"{% if not loop.last %},{% endif %}
+        {% endfor %}
+      ]
+    },
+    {% endif %}
+    {% endblock %}
+    {% block content %}
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## Main Content\n",
+        "\n",
+        "Add your notebook content here."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "# Main processing code goes here\n"
+      ]
+    }
+    {% endblock %}
+    {% block outputs %}
+    {% if outputs %}
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## Outputs"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "# Save outputs\n",
+        {% for output, path in outputs.items() %}
+        "# {{ output }} -> {{ path }}\n"{% if not loop.last %},{% endif %}
+        {% endfor %}
+      ]
+    }
+    {% endif %}
+    {% endblock %}
+  ],
+  "metadata": {
+    "kernelspec": {{ metadata.kernel_spec | to_json }},
+    "language_info": {
+      "codemirror_mode": {
+        "name": "ipython",
+        "version": 3
+      },
+      "file_extension": ".py",
+      "mimetype": "text/x-python",
+      "name": "python",
+      "nbconvert_exporter": "python",
+      "pygments_lexer": "ipython3",
+      "version": "{{ python_version }}"
+    }
+  },
+  "nbformat": 4,
+  "nbformat_minor": 4
+}

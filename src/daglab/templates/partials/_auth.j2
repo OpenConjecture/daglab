@@ -1,0 +1,211 @@
+{#- Authentication setup partial for secure Dagster connections -#}
+"""Configure authentication for Dagster GraphQL API"""
+import os
+import getpass
+from typing import Optional, Dict, Any
+{%- if use_keyring | default(false) %}
+import keyring
+{%- endif %}
+{%- if use_daglab_auth | default(true) %}
+from daglab.helpers.auth import (
+    AuthConfig,
+    AuthType,
+    TokenManager,
+    TokenProvider,
+    BearerAuthProvider,
+    BasicAuthProvider
+)
+{%- endif %}
+
+# Authentication configuration
+AUTH_METHOD = "{{ auth_method | default('env') }}"  # Options: env, bearer, basic, keyring, interactive, none
+
+{%- if auth_method == 'interactive' %}
+def get_auth_interactive() -> Optional[AuthConfig]:
+    """Interactively prompt for authentication credentials."""
+    print("=== Dagster Authentication Setup ===")
+    auth_type = input("Auth type (none/bearer/basic) [none]: ").lower() or "none"
+    
+    if auth_type == "bearer":
+        token = getpass.getpass("Enter bearer token: ")
+        if token:
+            {%- if use_keyring | default(false) %}
+            # Optionally save to keyring
+            save_to_keyring = input("Save to keyring? (y/n) [n]: ").lower() == 'y'
+            if save_to_keyring:
+                keyring.set_password("daglab", "dagster_token", token)
+                print("✅ Token saved to keyring")
+            {%- endif %}
+            return AuthConfig.bearer(token)
+    
+    elif auth_type == "basic":
+        username = input("Username: ")
+        password = getpass.getpass("Password: ")
+        if username and password:
+            {%- if use_keyring | default(false) %}
+            # Optionally save to keyring
+            save_to_keyring = input("Save to keyring? (y/n) [n]: ").lower() == 'y'
+            if save_to_keyring:
+                keyring.set_password("daglab", "dagster_username", username)
+                keyring.set_password("daglab", "dagster_password", password)
+                print("✅ Credentials saved to keyring")
+            {%- endif %}
+            return AuthConfig.basic(username, password)
+    
+    return AuthConfig(auth_type=AuthType.NONE)
+
+{%- elif auth_method == 'keyring' and use_keyring | default(false) %}
+def get_auth_from_keyring() -> Optional[AuthConfig]:
+    """Get authentication from system keyring."""
+    try:
+        # Try bearer token first
+        token = keyring.get_password("daglab", "dagster_token")
+        if token:
+            return AuthConfig.bearer(token)
+        
+        # Try basic auth
+        username = keyring.get_password("daglab", "dagster_username")
+        password = keyring.get_password("daglab", "dagster_password")
+        if username and password:
+            return AuthConfig.basic(username, password)
+    except Exception as e:
+        print(f"⚠️ Keyring access failed: {e}")
+    
+    return None
+
+{%- endif %}
+
+{%- if use_token_provider | default(false) %}
+class {{ token_provider_class | default('CustomTokenProvider') }}(TokenProvider):
+    """Custom token provider for advanced authentication flows."""
+    
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        {%- if token_cache_enabled | default(true) %}
+        self._token_cache = None
+        self._cache_expires = None
+        {%- endif %}
+    
+    def get_token(self) -> str:
+        """Get authentication token."""
+        {%- if token_source == 'oauth' %}
+        # OAuth flow example
+        from requests_oauthlib import OAuth2Session
+        oauth = OAuth2Session(
+            client_id=self.config.get('client_id'),
+            redirect_uri=self.config.get('redirect_uri')
+        )
+        # ... implement OAuth flow ...
+        {%- elif token_source == 'vault' %}
+        # HashiCorp Vault example
+        import hvac
+        client = hvac.Client(url=self.config.get('vault_url'))
+        client.token = os.getenv('VAULT_TOKEN')
+        secret = client.secrets.kv.v2.read_secret_version(
+            path=self.config.get('secret_path')
+        )
+        return secret['data']['data']['token']
+        {%- else %}
+        # Default: get from environment or config
+        return os.getenv('DAGSTER_TOKEN', self.config.get('token', ''))
+        {%- endif %}
+    
+    def refresh_token(self) -> Optional[str]:
+        """Refresh token if supported."""
+        {%- if token_refresh_enabled | default(false) %}
+        # Implement token refresh logic
+        try:
+            # Example refresh implementation
+            new_token = self._refresh_oauth_token()  # Custom implementation
+            return new_token
+        except Exception as e:
+            print(f"Token refresh failed: {e}")
+            return None
+        {%- else %}
+        return None
+        {%- endif %}
+{%- endif %}
+
+# Create authentication configuration
+def get_auth_config() -> AuthConfig:
+    """Get authentication configuration based on configured method."""
+    {%- if auth_method == 'env' or auth_method | default('env') == 'env' %}
+    # Auto-detect from environment variables
+    return AuthConfig.from_env()
+    
+    {%- elif auth_method == 'bearer' %}
+    # Bearer token authentication
+    token = {{ token_source | default('os.getenv("DAGSTER_TOKEN")') }}
+    return AuthConfig.bearer(token) if token else AuthConfig(auth_type=AuthType.NONE)
+    
+    {%- elif auth_method == 'basic' %}
+    # Basic authentication
+    username = {{ username_source | default('os.getenv("DAGSTER_USERNAME")') }}
+    password = {{ password_source | default('os.getenv("DAGSTER_PASSWORD")') }}
+    return AuthConfig.basic(username, password) if username and password else AuthConfig(auth_type=AuthType.NONE)
+    
+    {%- elif auth_method == 'keyring' and use_keyring | default(false) %}
+    # Get from system keyring
+    auth = get_auth_from_keyring()
+    return auth if auth else AuthConfig(auth_type=AuthType.NONE)
+    
+    {%- elif auth_method == 'interactive' %}
+    # Interactive authentication
+    return get_auth_interactive()
+    
+    {%- elif auth_method == 'custom' %}
+    # Custom authentication provider
+    {%- if use_token_provider | default(false) %}
+    provider_config = {{ provider_config | default({}) | tojson }}
+    token_provider = {{ token_provider_class | default('CustomTokenProvider') }}(provider_config)
+    
+    {%- if use_token_manager | default(true) %}
+    # Use token manager for caching and refresh
+    token_manager = TokenManager(
+        token_provider=token_provider,
+        cache_ttl={{ token_cache_ttl | default(3600) }},
+        refresh_threshold={{ token_refresh_threshold | default(300) }}
+    )
+    return AuthConfig(
+        auth_type=AuthType.BEARER,
+        provider=BearerAuthProvider(token_provider=token_manager)
+    )
+    {%- else %}
+    return AuthConfig(
+        auth_type=AuthType.BEARER,
+        provider=BearerAuthProvider(token_provider=token_provider)
+    )
+    {%- endif %}
+    {%- else %}
+    # Custom headers
+    custom_headers = {{ custom_auth_headers | default({}) | tojson }}
+    return AuthConfig.custom(custom_headers)
+    {%- endif %}
+    
+    {%- else %}
+    # No authentication
+    return AuthConfig(auth_type=AuthType.NONE)
+    {%- endif %}
+
+# Initialize authentication
+auth_config = get_auth_config()
+
+{%- if validate_auth | default(true) %}
+# Validate authentication configuration
+if auth_config.auth_type == AuthType.NONE:
+    {%- if warn_no_auth | default(true) %}
+    print("⚠️ No authentication configured. Connection may fail if Dagster requires auth.")
+    {%- endif %}
+else:
+    print(f"✅ Authentication configured: {auth_config.auth_type.value}")
+{%- endif %}
+
+{%- if store_auth_in_state | default(true) %}
+# Store auth config in notebook state if available
+if 'state_manager' in globals() or 'notebook_state' in globals():
+    state = globals().get('state_manager', globals().get('notebook_state'))
+    if hasattr(state, 'auth_config'):
+        state.auth_config = auth_config
+    elif hasattr(state, '__setitem__'):
+        state['auth_config'] = auth_config
+{%- endif %}

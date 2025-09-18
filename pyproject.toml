@@ -1,95 +1,219 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=68.0", "wheel", "setuptools_scm[toml]>=8.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "daglab"
-version = "0.1.0"
-description = "Scaffold and run paired marimo notebooks for Dagster assets & jobs"
-authors = [{name = "DAGLab Team", email = "team@daglab.io"}]
-license = {text = "MIT"}
+dynamic = ["version"]
+description = "A modular, distributed platform for complex data processing pipelines"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "DagLab Team", email = "team@daglab.io"},
+]
+maintainers = [
+    {name = "DagLab Maintainers", email = "maintainers@daglab.io"},
+]
+keywords = [
+    "dag",
+    "pipeline",
+    "workflow",
+    "data-processing",
+    "orchestration",
+    "distributed",
+    "gpu",
+    "ray",
+    "mlflow",
+    "async",
+]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
-    "Topic :: Software Development :: Libraries",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: System :: Distributed Computing",
+    "Typing :: Typed",
 ]
 
+[project.urls]
+Homepage = "https://github.com/daglab/daglab"
+Documentation = "https://docs.daglab.io"
+Repository = "https://github.com/daglab/daglab"
+Issues = "https://github.com/daglab/daglab/issues"
+Changelog = "https://github.com/daglab/daglab/blob/main/CHANGELOG.md"
+
+# Core dependencies - minimal set for basic functionality
 dependencies = [
-    "pydantic>=2.0.0",
-    "pydantic-settings>=2.0.0",
-    "pyyaml>=6.0",
-    "typer>=0.9.0",
-    "rich>=13.0.0",
+    "pydantic>=2.5.0",
+    "httpx>=0.26.0",
+    "rich>=13.7.0",
+    "tenacity>=8.2.0",
+    "asyncio-throttle>=1.0.2",
+    "python-dateutil>=2.8.2",
+    "structlog>=24.1.0",
+    "cryptography>=42.0.0",
+    "jsonschema>=4.21.0",
+    "click>=8.1.0",
 ]
 
 [project.optional-dependencies]
+# Cloud provider integrations
+aws = [
+    "boto3>=1.34.0",
+    "aioboto3>=12.3.0",
+]
+gcp = [
+    "google-cloud-storage>=2.14.0",
+    "google-cloud-pubsub>=2.19.0",
+]
+azure = [
+    "azure-storage-blob>=12.19.0",
+    "azure-identity>=1.15.0",
+]
+
+# Compute and ML frameworks
+ray = [
+    "ray[default]>=2.9.0",
+    "ray[serve]>=2.9.0",
+]
+ml = [
+    "mlflow>=2.10.0",
+    "numpy>=1.26.0",
+    "pandas>=2.2.0",
+    "scikit-learn>=1.4.0",
+]
+gpu = [
+    "cupy>=13.0.0",
+    "torch>=2.2.0",
+    "jax>=0.4.23",
+]
+
+# Visualization and monitoring
+viz = [
+    "matplotlib>=3.8.0",
+    "plotly>=5.18.0",
+    "dash>=2.14.0",
+    "networkx>=3.2.0",
+]
+monitoring = [
+    "prometheus-client>=0.19.0",
+    "opentelemetry-api>=1.22.0",
+    "opentelemetry-sdk>=1.22.0",
+    "opentelemetry-instrumentation>=0.43b0",
+]
+
+# Development tools
 dev = [
-    "pytest>=7.2.0",
-    "pytest-cov>=4.0.0",
-    "mypy>=1.0.0",
-    "black>=23.0.0",
-    "ruff>=0.0.260",
-    "pre-commit>=3.2.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+    "pytest-mock>=3.12.0",
+    "pytest-timeout>=2.2.0",
+    "pytest-benchmark>=4.0.0",
+    "black>=24.1.0",
+    "ruff>=0.2.0",
+    "mypy>=1.8.0",
+    "pre-commit>=3.6.0",
+    "tox>=4.12.0",
+    "build>=1.0.0",
+    "twine>=4.0.2",
+    "mkdocs>=1.5.3",
+    "mkdocs-material>=9.5.0",
+    "mkdocstrings[python]>=0.24.0",
+    "types-python-dateutil>=2.8.19",
+    "types-jsonschema>=4.21.0",
+]
+
+# Complete installation with all features
+all = [
+    "daglab[aws,gcp,azure,ray,ml,gpu,viz,monitoring]",
 ]
 
 [project.scripts]
 daglab = "daglab.cli:main"
 
-[project.urls]
-"Homepage" = "https://github.com/openconjecture/daglab"
-"Bug Reports" = "https://github.com/openconjecture/daglab/issues"
-"Documentation" = "https://daglab.readthedocs.io"
-"Source" = "https://github.com/openconjecture/daglab"
+[project.entry-points."daglab.plugins"]
+s3 = "daglab.integrations.aws:S3Plugin"
+gcs = "daglab.integrations.gcp:GCSPlugin"
+azure = "daglab.integrations.azure:AzurePlugin"
 
 [tool.setuptools]
-packages = {find = {where = ["src"]}}
+zip-safe = false
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["daglab*"]
+exclude = ["tests*", "docs*", "examples*"]
 
 [tool.setuptools.package-data]
-daglab = ["py.typed"]
+daglab = ["py.typed", "*.json", "*.yaml", "*.yml"]
+
+[tool.setuptools_scm]
+write_to = "src/daglab/_version.py"
+version_scheme = "post-release"
+local_scheme = "node-and-date"
+fallback_version = "0.1.0"
 
 [tool.black]
-line-length = 88
-target-version = ['py310', 'py311']
+line-length = 100
+target-version = ['py311', 'py312']
 include = '\.pyi?$'
-
-[tool.isort]
-profile = "black"
-multi_line_output = 3
-include_trailing_comma = true
-force_grid_wrap = 0
-use_parentheses = true
-ensure_newline_before_comments = true
-line_length = 88
-src_paths = ["src", "tests"]
+extend-exclude = '''
+^/(
+  (
+    \.git
+    | \.tox
+    | \.venv
+    | \.mypy_cache
+    | \.pytest_cache
+    | \.ruff_cache
+    | build
+    | dist
+    | docs
+  )/
+)
+'''
 
 [tool.ruff]
-line-length = 88
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
 select = [
-    "E",  # pycodestyle errors
-    "W",  # pycodestyle warnings
-    "F",  # pyflakes
-    "I",  # isort
-    "B",  # flake8-bugbear
-    "C4", # flake8-comprehensions
-    "UP", # pyupgrade
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade
+    "ARG",  # flake8-unused-arguments
+    "SIM",  # flake8-simplify
+    "PTH",  # flake8-use-pathlib
+    "RUF",  # Ruff-specific rules
 ]
 ignore = [
-    "E501",  # line too long, handled by black
-    "B008",  # do not perform function calls in argument defaults
+    "E501",   # line too long
+    "B008",   # do not perform function calls in argument defaults
+    "B905",   # `zip()` without an explicit `strict=` parameter
 ]
 
-[tool.ruff.per-file-ignores]
-"__init__.py" = ["F401"]
-"tests/**" = ["ARG"]
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ARG", "S101"]
+"examples/*" = ["ARG"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -100,32 +224,46 @@ no_implicit_optional = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 warn_no_return = true
-follow_imports = "normal"
-strict_optional = true
-ignore_missing_imports = true
+warn_unreachable = true
+strict_equality = true
+strict_concatenate = true
+namespace_packages = true
+show_error_codes = true
+show_error_context = true
+pretty = true
 
 [tool.pytest.ini_options]
-minversion = "6.0"
-addopts = "-ra -q --strict-markers"
-testpaths = [
-    "tests",
+minversion = "8.0"
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--cov=daglab",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+    "--cov-report=xml",
+    "--cov-fail-under=80",
+    "--timeout=300",
 ]
-python_files = "test_*.py"
-python_classes = "Test*"
-python_functions = "test_*"
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "gpu: marks tests that require GPU",
+    "cloud: marks tests that require cloud services",
+]
+asyncio_mode = "auto"
 
 [tool.coverage.run]
-branch = true
 source = ["src/daglab"]
+branch = true
 omit = [
     "*/tests/*",
-    "*/test_*",
-    "*/__pycache__/*",
-    "*/site-packages/*",
+    "*/_version.py",
+    "*/examples/*",
 ]
 
 [tool.coverage.report]
-precision = 2
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",
@@ -139,3 +277,49 @@ exclude_lines = [
     "class .*\\bProtocol\\):",
     "@(abc\\.)?abstractmethod",
 ]
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+[tool.tox]
+legacy_tox_ini = """
+[tox]
+envlist = py311,py312,py313,type,lint,docs
+isolated_build = true
+
+[testenv]
+deps =
+    pytest>=8.0.0
+    pytest-asyncio>=0.23.0
+    pytest-cov>=4.1.0
+    pytest-mock>=3.12.0
+    pytest-timeout>=2.2.0
+setenv =
+    PYTHONPATH = {toxinidir}/src
+commands =
+    pytest {posargs}
+
+[testenv:type]
+deps =
+    mypy>=1.8.0
+    types-python-dateutil
+    types-jsonschema
+commands =
+    mypy src/daglab
+
+[testenv:lint]
+deps =
+    black>=24.1.0
+    ruff>=0.2.0
+commands =
+    black --check src tests
+    ruff check src tests
+
+[testenv:docs]
+deps =
+    mkdocs>=1.5.3
+    mkdocs-material>=9.5.0
+    mkdocstrings[python]>=0.24.0
+commands =
+    mkdocs build
+"""

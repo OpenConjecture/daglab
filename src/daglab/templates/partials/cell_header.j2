@@ -1,0 +1,12 @@
+{# Partial template for cell headers #}
+{
+  "cell_type": "markdown",
+  "metadata": {},
+  "source": [
+    "{{ header_prefix | default('##') }} {{ title }}\n",
+    {% if description %}
+    "\n",
+    "{{ description }}"
+    {% endif %}
+  ]
+}

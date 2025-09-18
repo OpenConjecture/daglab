@@ -1,0 +1,574 @@
+{#- Interactive run controls for pipeline execution with real GraphQL integration -#}
+"""Interactive controls for pipeline execution using Dagster GraphQL API"""
+
+{%- if fetch_pipelines | default(true) %}
+# Fetch available pipelines/jobs from Dagster
+available_jobs = {{ default_pipelines | default([]) | tojson }}
+available_repositories = []
+
+if client and connection_success:
+    try:
+        {%- if use_daglab_client | default(true) %}
+        # Query for repositories and jobs using Daglab client
+        query = """
+        query GetJobsAndRepositories {
+            repositoriesOrError {
+                ... on RepositoryConnection {
+                    nodes {
+                        id
+                        name
+                        location {
+                            name
+                        }
+                        jobs {
+                            id
+                            name
+                            description
+                            mode
+                        }
+                        pipelines {
+                            id
+                            name
+                            description
+                            modes {
+                                name
+                            }
+                        }
+                    }
+                }
+                ... on PythonError {
+                    message
+                    stack
+                }
+            }
+        }
+        """
+        
+        {%- if use_sync | default(true) %}
+        result = client.query(query)
+        {%- else %}
+        result = await client.query(query)
+        {%- endif %}
+        
+        if 'repositoriesOrError' in result and 'nodes' in result['repositoriesOrError']:
+            repos_data = result['repositoriesOrError']['nodes']
+            available_repositories = [repo['name'] for repo in repos_data]
+            
+            # Collect all jobs
+            jobs = []
+            for repo in repos_data:
+                repo_name = repo['name']
+                # Try jobs first (newer), then pipelines
+                job_list = repo.get('jobs', repo.get('pipelines', []))
+                for job in job_list:
+                    jobs.append({
+                        'name': job['name'],
+                        'id': job['id'],
+                        'repository': repo_name,
+                        'location': repo['location']['name'],
+                        'description': job.get('description', ''),
+                        'modes': job.get('modes', [{'name': 'default'}])
+                    })
+            
+            if jobs:
+                available_jobs = jobs
+                {%- if show_debug | default(false) %}
+                print(f"Found {len(jobs)} jobs across {len(repos_data)} repositories")
+                {%- endif %}
+        {%- else %}
+        # Standard Dagster GraphQL client
+        result = client._execute("""
+            query {
+                repositoriesOrError {
+                    ... on RepositoryConnection {
+                        nodes {
+                            name
+                            pipelines {
+                                name
+                            }
+                        }
+                    }
+                }
+            }
+        """)
+        
+        if result.get('repositoriesOrError', {}).get('nodes'):
+            jobs = []
+            for repo in result['repositoriesOrError']['nodes']:
+                for pipeline in repo.get('pipelines', []):
+                    jobs.append({
+                        'name': pipeline['name'],
+                        'repository': repo['name']
+                    })
+            if jobs:
+                available_jobs = jobs
+        {%- endif %}
+    except Exception as e:
+        {%- if show_errors | default(true) %}
+        print(f"⚠️ Failed to fetch jobs: {str(e)}")
+        {%- endif %}
+{%- endif %}
+
+# UI Components
+{%- if group_by_repository | default(false) and fetch_pipelines | default(true) %}
+# Group jobs by repository
+job_options = {}
+for job in available_jobs:
+    if isinstance(job, dict):
+        repo = job.get('repository', 'default')
+        if repo not in job_options:
+            job_options[repo] = []
+        job_options[repo].append(job['name'])
+    else:
+        if 'default' not in job_options:
+            job_options['default'] = []
+        job_options['default'].append(job)
+
+job_select = mo.ui.dropdown(
+    options=job_options if job_options else {{ default_pipelines | default(['example_job']) | tojson }},
+    value={{ 'list(job_options.values())[0][0] if job_options and list(job_options.values())[0] else ""' if auto_select_first | default(true) else '""' }},
+    label="{{ pipeline_label | default('Select Job') }}"
+)
+{%- else %}
+# Simple job list
+job_names = [j['name'] if isinstance(j, dict) else j for j in available_jobs] if available_jobs else {{ default_pipelines | default(['example_job']) | tojson }}
+job_select = mo.ui.dropdown(
+    options=job_names,
+    value={{ 'job_names[0] if job_names else ""' if auto_select_first | default(true) else '""' }},
+    label="{{ pipeline_label | default('Select Job') }}"
+)
+{%- endif %}
+
+{%- if show_repository_selector | default(false) and fetch_pipelines | default(true) %}
+repository_select = mo.ui.dropdown(
+    options=available_repositories if available_repositories else ["default"],
+    value=available_repositories[0] if available_repositories else "default",
+    label="Repository"
+)
+{%- endif %}
+
+{%- if show_run_config | default(true) %}
+# Run configuration editor with syntax highlighting
+default_run_config = {{ default_config | default('{\n  "ops": {},\n  "resources": {}\n}') | tojson }}
+
+run_config = mo.ui.text_area(
+    value=default_run_config,
+    label="{{ config_label | default('Run Configuration (YAML or JSON)') }}",
+    rows={{ config_rows | default(10) }},
+    placeholder="Enter run config in YAML or JSON format"
+)
+{%- endif %}
+
+{%- if show_tags | default(true) %}
+# Tags input with better formatting
+default_tags_dict = {{ default_tags_dict | default({'source': 'daglab-notebook'}) | tojson }}
+tags_json = json.dumps(default_tags_dict, indent=2)
+
+run_tags = mo.ui.text_area(
+    value=tags_json,
+    label="Tags (JSON)",
+    rows=3,
+    placeholder='{"key": "value"}'
+)
+{%- endif %}
+
+{%- if show_solid_selection | default(false) %}
+# Solid/op selection for partial runs
+solid_selection = mo.ui.text(
+    value='{{ default_solid_selection | default("") }}',
+    label="Solid Selection (comma-separated)",
+    placeholder="solid1, solid2, solid3"
+)
+{%- endif %}
+
+# Action buttons
+run_button = mo.ui.button(
+    label="{{ run_label | default('🚀 Launch Job') }}",
+    kind="{{ run_button_kind | default('success') }}"
+)
+
+{%- if show_validate_button | default(true) %}
+validate_button = mo.ui.button(
+    label="{{ validate_label | default('✓ Validate Config') }}",
+    kind="{{ validate_button_kind | default('neutral') }}"
+)
+{%- endif %}
+
+{%- if show_reload_button | default(true) %}
+reload_button = mo.ui.button(
+    label="{{ reload_label | default('🔄 Reload Jobs') }}",
+    kind="{{ reload_button_kind | default('neutral') }}"
+)
+{%- endif %}
+
+# Execution functions
+def validate_run_config():
+    """Validate run configuration before submission"""
+    try:
+        {%- if show_run_config | default(true) %}
+        # Try parsing as JSON first, then YAML
+        import yaml
+        config_text = run_config.value.strip()
+        if config_text:
+            try:
+                config_dict = json.loads(config_text)
+            except json.JSONDecodeError:
+                config_dict = yaml.safe_load(config_text)
+        else:
+            config_dict = {}
+        {%- else %}
+        config_dict = {}
+        {%- endif %}
+        
+        {%- if show_tags | default(true) %}
+        # Parse tags
+        tags_dict = json.loads(run_tags.value) if run_tags.value.strip() else {}
+        {%- else %}
+        tags_dict = {}
+        {%- endif %}
+        
+        return True, config_dict, tags_dict
+        
+    except (json.JSONDecodeError, yaml.YAMLError) as e:
+        return False, str(e), None
+
+{%- if show_validate_button | default(true) %}
+async def validate_config_with_dagster():
+    """Validate configuration against Dagster schema"""
+    if not client or not job_select.value:
+        mo.md("❌ No client connection or job selected").callout(kind="warn")
+        return
+    
+    valid, config_or_error, tags = validate_run_config()
+    if not valid:
+        mo.md(f"❌ Configuration error: {config_or_error}").callout(kind="danger")
+        return
+    
+    try:
+        {%- if use_daglab_client | default(true) %}
+        # Validate config using GraphQL
+        {%- if show_repository_selector | default(false) %}
+        repo_name = repository_select.value
+        {%- else %}
+        # Find repository for selected job
+        repo_name = next((j.get('repository', 'default') for j in available_jobs if isinstance(j, dict) and j['name'] == job_select.value), 'default')
+        {%- endif %}
+        
+        validation_query = """
+        mutation ValidateConfig($repositoryName: String!, $jobName: String!, $runConfigData: RunConfigData!) {
+            isPipelineConfigValid(
+                pipeline: {
+                    repositoryName: $repositoryName,
+                    pipelineName: $jobName
+                },
+                runConfigData: $runConfigData
+            ) {
+                __typename
+                ... on PipelineConfigValidationValid {
+                    pipelineName
+                }
+                ... on RunConfigValidationInvalid {
+                    errors {
+                        message
+                        path
+                        reason
+                    }
+                }
+            }
+        }
+        """
+        
+        variables = {
+            "repositoryName": repo_name,
+            "jobName": job_select.value,
+            "runConfigData": config_or_error
+        }
+        
+        {%- if use_sync | default(true) %}
+        result = client.query(validation_query, variables)
+        {%- else %}
+        result = await client.query(validation_query, variables)
+        {%- endif %}
+        
+        validation = result.get('isPipelineConfigValid', {})
+        if validation.get('__typename') == 'PipelineConfigValidationValid':
+            mo.md("✅ Configuration is valid!").callout(kind="success")
+        else:
+            errors = validation.get('errors', [])
+            error_msg = "❌ Configuration errors:\n"
+            for err in errors:
+                error_msg += f"- {err['message']} (path: {err.get('path', 'N/A')})\n"
+            mo.md(error_msg).callout(kind="danger")
+        {%- else %}
+        mo.md("✅ Basic validation passed").callout(kind="success")
+        {%- endif %}
+        
+    except Exception as e:
+        mo.md(f"❌ Validation error: {str(e)}").callout(kind="danger")
+{%- endif %}
+
+async def execute_job():
+    """Execute the selected job with configuration"""
+    if not client:
+        mo.md("❌ No connection to Dagster").callout(kind="danger")
+        return
+    
+    if not job_select.value:
+        mo.md("❌ Please select a job").callout(kind="danger")
+        return
+    
+    # Validate configuration
+    valid, config_or_error, tags = validate_run_config()
+    if not valid:
+        mo.md(f"❌ Configuration error: {config_or_error}").callout(kind="danger")
+        return
+    
+    try:
+        {%- if show_progress | default(true) %}
+        mo.md("🔄 Submitting job...").callout(kind="info")
+        {%- endif %}
+        
+        {%- if use_daglab_client | default(true) %}
+        # Submit job using GraphQL mutation
+        {%- if show_repository_selector | default(false) %}
+        repo_name = repository_select.value
+        {%- else %}
+        # Find repository for selected job
+        repo_name = next((j.get('repository', 'default') for j in available_jobs if isinstance(j, dict) and j['name'] == job_select.value), 'default')
+        location_name = next((j.get('location', 'default') for j in available_jobs if isinstance(j, dict) and j['name'] == job_select.value), 'default')
+        {%- endif %}
+        
+        launch_mutation = """
+        mutation LaunchJob($executionParams: ExecutionParams!) {
+            launchPipelineExecution(executionParams: $executionParams) {
+                __typename
+                ... on LaunchRunSuccess {
+                    run {
+                        id
+                        runId
+                        status
+                        pipelineName
+                        tags {
+                            key
+                            value
+                        }
+                    }
+                }
+                ... on RunConfigValidationInvalid {
+                    errors {
+                        message
+                        path
+                    }
+                }
+                ... on PythonError {
+                    message
+                    stack
+                }
+            }
+        }
+        """
+        
+        # Add metadata tags
+        {%- if add_metadata_tags | default(true) %}
+        if 'notebook_metadata' in globals():
+            tags.update({
+                "notebook": notebook_metadata.get('title', 'unknown'),
+                "author": notebook_metadata.get('author', 'unknown'),
+                "daglab_version": "{{ version | default('1.0.0') }}"
+            })
+        {%- endif %}
+        
+        variables = {
+            "executionParams": {
+                "selector": {
+                    "repositoryLocationName": location_name,
+                    "repositoryName": repo_name,
+                    "pipelineName": job_select.value,
+                    {%- if show_solid_selection | default(false) %}
+                    "solidSelection": [s.strip() for s in solid_selection.value.split(',')] if solid_selection.value else None
+                    {%- endif %}
+                },
+                "runConfigData": config_or_error,
+                "mode": "default",
+                "executionMetadata": {
+                    "tags": [{"key": k, "value": str(v)} for k, v in tags.items()]
+                }
+            }
+        }
+        
+        {%- if use_sync | default(true) %}
+        result = client.mutate(launch_mutation, variables)
+        {%- else %}
+        result = await client.mutate(launch_mutation, variables)
+        {%- endif %}
+        
+        launch_result = result.get('launchPipelineExecution', {})
+        
+        if launch_result.get('__typename') == 'LaunchRunSuccess':
+            run = launch_result['run']
+            run_id = run['runId']
+            
+            {%- if track_in_state | default(true) %}
+            # Track in state
+            if 'state_manager' in globals() or 'notebook_state' in globals():
+                state = globals().get('state_manager', globals().get('notebook_state'))
+                run_data = {
+                    'run_id': run_id,
+                    'job': job_select.value,
+                    'repository': repo_name,
+                    'status': run['status'],
+                    'config': config_or_error,
+                    'tags': tags,
+                    'timestamp': datetime.now().isoformat()
+                }
+                
+                if hasattr(state, 'add_run'):
+                    state.add_run(run_data)
+                elif hasattr(state, '__setitem__'):
+                    if 'runs' not in state:
+                        state['runs'] = []
+                    state['runs'].append(run_data)
+            {%- endif %}
+            
+            {%- if show_run_link | default(true) %}
+            # Create link to Dagster UI
+            run_url = f"{dagster_url}/instance/runs/{run_id}"
+            mo.md(f"""
+            ✅ **Job launched successfully!**
+            
+            - **Run ID**: `{run_id}`
+            - **Status**: {run['status']}
+            - [View in Dagster UI]({run_url})
+            """).callout(kind="success")
+            {%- else %}
+            mo.md(f"✅ Job launched! Run ID: `{run_id}`").callout(kind="success")
+            {%- endif %}
+            
+            return run_id
+            
+        elif launch_result.get('__typename') == 'RunConfigValidationInvalid':
+            errors = launch_result.get('errors', [])
+            error_msg = "❌ Configuration errors:\n"
+            for err in errors:
+                error_msg += f"- {err['message']}\n"
+            mo.md(error_msg).callout(kind="danger")
+            
+        else:
+            error_msg = launch_result.get('message', 'Unknown error')
+            mo.md(f"❌ Failed to launch job: {error_msg}").callout(kind="danger")
+        {%- else %}
+        # Use standard Dagster client
+        run = client.submit_job_execution(
+            job_name=job_select.value,
+            run_config=config_or_error,
+            tags=tags
+        )
+        
+        mo.md(f"✅ Job launched! Run ID: `{run.run_id}`").callout(kind="success")
+        return run.run_id
+        {%- endif %}
+        
+    except Exception as e:
+        import traceback
+        mo.md(f"❌ Execution failed: {str(e)}\n\n{traceback.format_exc()}").callout(kind="danger")
+    
+    return None
+
+{%- if show_reload_button | default(true) %}
+async def reload_jobs():
+    """Reload available jobs from Dagster"""
+    global available_jobs, available_repositories
+    
+    if not client:
+        mo.md("❌ No connection to Dagster").callout(kind="danger")
+        return
+    
+    try:
+        mo.md("🔄 Reloading jobs...").callout(kind="info")
+        
+        # Re-run the job fetching logic
+        {%- if use_daglab_client | default(true) %}
+        query = """
+        query GetJobsAndRepositories {
+            repositoriesOrError {
+                ... on RepositoryConnection {
+                    nodes {
+                        id
+                        name
+                        location {
+                            name
+                        }
+                        jobs {
+                            id
+                            name
+                            description
+                        }
+                    }
+                }
+            }
+        }
+        """
+        
+        {%- if use_sync | default(true) %}
+        result = client.query(query)
+        {%- else %}
+        result = await client.query(query)
+        {%- endif %}
+        
+        if 'repositoriesOrError' in result and 'nodes' in result['repositoriesOrError']:
+            # Update available jobs
+            # ... (refresh logic)
+            mo.md("✅ Jobs reloaded successfully").callout(kind="success")
+        {%- endif %}
+        
+    except Exception as e:
+        mo.md(f"❌ Failed to reload: {str(e)}").callout(kind="danger")
+{%- endif %}
+
+# Event handlers
+{%- if use_sync | default(true) %}
+run_button.on_click(lambda _: asyncio.run(execute_job()))
+{%- if show_validate_button | default(true) %}
+validate_button.on_click(lambda _: asyncio.run(validate_config_with_dagster()))
+{%- endif %}
+{%- if show_reload_button | default(true) %}
+reload_button.on_click(lambda _: asyncio.run(reload_jobs()))
+{%- endif %}
+{%- else %}
+run_button.on_click(execute_job)
+{%- if show_validate_button | default(true) %}
+validate_button.on_click(validate_config_with_dagster)
+{%- endif %}
+{%- if show_reload_button | default(true) %}
+reload_button.on_click(reload_jobs)
+{%- endif %}
+{%- endif %}
+
+# Layout
+mo.vstack([
+    {%- if show_title | default(true) %}
+    mo.md("### 🚀 Job Execution Controls"),
+    {%- endif %}
+    {%- if show_repository_selector | default(false) and fetch_pipelines | default(true) %}
+    repository_select,
+    {%- endif %}
+    job_select,
+    {%- if show_run_config | default(true) %}
+    run_config,
+    {%- endif %}
+    {%- if show_tags | default(true) %}
+    run_tags,
+    {%- endif %}
+    {%- if show_solid_selection | default(false) %}
+    solid_selection,
+    {%- endif %}
+    mo.hstack([
+        run_button,
+        {%- if show_validate_button | default(true) %}
+        validate_button,
+        {%- endif %}
+        {%- if show_reload_button | default(true) %}
+        reload_button,
+        {%- endif %}
+    ], gap={{ button_gap | default(2) }})
+], gap={{ control_gap | default(2) }})

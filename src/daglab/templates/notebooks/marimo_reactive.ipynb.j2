@@ -1,0 +1,183 @@
+{% extends "notebook_base.ipynb.j2" %}
+
+{% block imports %}
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "# Marimo imports\n",
+        "import marimo as mo\n",
+        "\n",
+        "# Standard imports\n",
+        {% for import in imports %}
+        "{{ import }}\n"{% if not loop.last %},{% endif %}
+        {% endfor %}
+      ]
+    },
+{% endblock %}
+
+{% block parameters %}
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## Reactive Parameters\n",
+        "\n",
+        "These parameters will create reactive UI elements in marimo."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "tags": ["parameters"]
+      },
+      "outputs": [],
+      "source": [
+        "# Create marimo UI elements for parameters\n",
+        {% for param, value in parameters.items() %}
+        {% if value is number %}
+        "{{ param }}_slider = mo.ui.slider(\n",
+        "    start=0,\n",
+        "    stop={{ value * 2 }},\n",
+        "    value={{ value }},\n",
+        "    label='{{ param | replace('_', ' ') | title }}'\n",
+        ")\n",
+        "{{ param }} = {{ param }}_slider.value\n"{% if not loop.last %},{% endif %}
+        {% elif value is string %}
+        "{{ param }}_input = mo.ui.text(\n",
+        "    value={{ value | to_json }},\n",
+        "    label='{{ param | replace('_', ' ') | title }}'\n",
+        ")\n",
+        "{{ param }} = {{ param }}_input.value\n"{% if not loop.last %},{% endif %}
+        {% else %}
+        "{{ param }} = {{ value | to_json }}\n"{% if not loop.last %},{% endif %}
+        {% endif %}
+        {% endfor %}
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "# Display parameter controls\n",
+        "mo.md(f'''\n",
+        "## Control Panel\n",
+        "\n",
+        {% for param in parameters.keys() %}
+        {% if parameters[param] is number or parameters[param] is string %}
+        "{{{ param }}_{% if parameters[param] is number %}slider{% else %}input{% endif %}}\n",
+        {% endif %}
+        {% endfor %}
+        "''')"
+      ]
+    }
+{% endblock %}
+
+{% block content %}
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## Reactive Notebook: {{ metadata.name }}\n",
+        "\n",
+        "This is a marimo reactive notebook. Changes to parameters will automatically update dependent cells."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "# Reactive computation\n",
+        "@mo.cache\n",
+        "def process_data({% for param in parameters.keys() %}{{ param }}{% if not loop.last %}, {% endif %}{% endfor %}):\n",
+        "    \"\"\"Process data with current parameter values.\"\"\"\n",
+        "    # TODO: Add your processing logic here\n",
+        "    result = {\n",
+        {% for param in parameters.keys() %}
+        "        '{{ param }}': {{ param }},\n",
+        {% endfor %}
+        "        'processed': True\n",
+        "    }\n",
+        "    return result\n",
+        "\n",
+        "# Call the function - it will re-run when parameters change\n",
+        "data = process_data({% for param in parameters.keys() %}{{ param }}{% if not loop.last %}, {% endif %}{% endfor %})"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "# Reactive visualization\n",
+        "import matplotlib.pyplot as plt\n",
+        "\n",
+        "fig, ax = plt.subplots(figsize=(10, 6))\n",
+        "\n",
+        "# TODO: Add your visualization logic here\n",
+        "# This will update automatically when data changes\n",
+        "\n",
+        "mo.mpl.interactive(fig)"
+      ]
+    }
+{% endblock %}
+
+{% block outputs %}
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## Output Display\n",
+        "\n",
+        "Results update automatically based on parameter changes."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "# Display results\n",
+        "mo.md(f'''\n",
+        "### Results\n",
+        "\n",
+        "{mo.as_html(data)}\n",
+        "\n",
+        {% if outputs %}
+        "### Output Files\n",
+        {% for output, path in outputs.items() %}\n",
+        "- **{{ output }}**: `{{ path }}`\n",
+        {% endfor %}\n",
+        {% endif %}\n",
+        "''')"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "# Export functionality\n",
+        "export_button = mo.ui.button(label='Export Results')\n",
+        "\n",
+        "if export_button.value:\n",
+        {% for output, path in outputs.items() %}\n",
+        "    # Export {{ output }}\n",
+        "    # TODO: Add export logic for {{ path }}\n",
+        {% endfor %}\n",
+        "    mo.md('✅ Results exported successfully!')\n",
+        "\n",
+        "export_button"
+      ]
+    }
+{% endblock %}

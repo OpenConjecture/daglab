@@ -1,0 +1,51 @@
+# DagLab Code Owners
+# This file defines who is responsible for code in this repository.
+# Each line is a file pattern followed by one or more owners.
+
+# Default owner for everything in the repo
+* @daglab-maintainers
+
+# Core components require multiple reviewers
+/src/daglab/core/ @daglab-core @daglab-architects
+/src/daglab/runtime/ @daglab-core @daglab-runtime
+
+# API and contracts
+/src/daglab/api/ @daglab-api @daglab-architects
+/src/daglab/contracts/ @daglab-api @daglab-core
+
+# Storage and integrations
+/src/daglab/storage/ @daglab-storage @daglab-data
+/src/daglab/integrations/ @daglab-integrations
+
+# Infrastructure and operations
+/.github/ @daglab-devops @daglab-core
+/docker/ @daglab-devops
+/scripts/ @daglab-devops
+/Dockerfile @daglab-devops
+/docker-compose.yml @daglab-devops
+
+# Configuration
+/pyproject.toml @daglab-core @daglab-architects
+/setup.py @daglab-core @daglab-architects
+/requirements*.txt @daglab-core
+
+# Documentation
+/docs/ @daglab-docs @daglab-core
+/README.md @daglab-docs @daglab-core
+/CONTRIBUTING.md @daglab-docs @daglab-core
+/CHANGELOG.md @daglab-release
+
+# Tests
+/tests/ @daglab-qa @daglab-core
+/tests/integration/ @daglab-qa @daglab-integrations
+/tests/benchmarks/ @daglab-performance
+
+# Security-sensitive files
+/src/daglab/security/ @daglab-security @daglab-core
+/src/daglab/auth/ @daglab-security @daglab-core
+/.env.example @daglab-security
+/config/ @daglab-security
+
+# Release management
+/.github/workflows/release.yml @daglab-release @daglab-core
+/.github/cliff.toml @daglab-release
