@@ -146,11 +146,11 @@ MIT License - see [LICENSE](LICENSE) file for details.
 ## Roadmap
 
 - [x] Phase 1: Foundation & Core Infrastructure
-- [ ] Phase 2: CLI Framework & Basic Commands
-- [ ] Phase 3: Notebook Generation & Templates
-- [ ] Phase 4: Dagster Integration & GraphQL
-- [ ] Phase 5: Advanced Features & Polish
-- [ ] Phase 6: Packaging & Release
+- [x] Phase 2: CLI Framework & Basic Commands
+- [x] Phase 3: Notebook Generation & Templates
+- [x] Phase 4: Dagster Integration & GraphQL
+- [x] Phase 5: Advanced Features & Polish
+- [x] Phase 6: Packaging & Release
 
 ## Support
 
