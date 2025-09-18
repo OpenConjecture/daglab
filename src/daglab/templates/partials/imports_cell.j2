@@ -1,0 +1,17 @@
+{# Partial template for import cells #}
+{
+  "cell_type": "code",
+  "execution_count": null,
+  "metadata": {},
+  "outputs": [],
+  "source": [
+    {% for section, imports_list in imports_grouped.items() %}
+    "# {{ section }}\n",
+    {% for import in imports_list %}
+    "{{ import }}\n"{% if not loop.last %},{% endif %}
+    {% endfor %}
+    {% if not loop.last %},
+    "\n",{% endif %}
+    {% endfor %}
+  ]
+}

@@ -1,0 +1,38 @@
+# Example asset materialization configuration
+# Usage: daglab run --asset-selection raw_orders --run-config asset_config.yaml
+
+# Asset configuration
+assets:
+  raw_orders:
+    partitions:
+      start_date: "2024-01-01"
+      end_date: "2024-01-31"
+    config:
+      source_table: orders
+      include_columns:
+        - order_id
+        - customer_id
+        - order_date
+        - total_amount
+        - status
+      
+  cleaned_orders:
+    config:
+      validation_rules:
+        - field: total_amount
+          type: positive_number
+        - field: order_date
+          type: valid_date
+      output_path: ${DATA_PATH:-/tmp/dagster}/cleaned/orders
+
+# IO manager configuration  
+resources:
+  io_manager:
+    config:
+      base_path: ${DAGSTER_HOME:-/tmp/dagster}/storage
+
+# Execution configuration
+execution:
+  config:
+    in_process:
+      marker_to_close: ASSET_MATERIALIZATION_COMPLETE

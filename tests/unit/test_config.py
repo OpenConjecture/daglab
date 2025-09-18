@@ -1,170 +1,285 @@
-"""Unit tests for configuration management."""
+"""
+Unit tests for DagLab configuration management system.
+"""
 
 import os
-import tempfile
-from pathlib import Path
-from typing import Any, Dict
-
-import pytest
+import json
 import yaml
-from pydantic import ValidationError
+import tempfile
+import pytest
+from pathlib import Path
+from typing import Dict, Any
 
 from daglab.config import (
-    get_config_search_paths,
-    DagsterConfig,
-    DaglabConfig,
-    DefaultsConfig,
-    ExportConfig,
-    ExportFormat,
-    LogLevel,
-    LoggingConfig,
-    MarimoConfig,
-    PerformanceConfig,
-    SecurityConfig,
-    TelemetryConfig,
-    TelemetryLevel,
-    find_config_file,
-    get_config,
-    get_default_config,
-    load_config,
-    load_config_file,
-    merge_configs,
-    save_config,
-    set_config,
+    DaglabConfig, DagsterConfig, MarimoConfig, DefaultsConfig,
+    PerformanceConfig, ExportConfig, LoggingConfig, TelemetryConfig,
+    SecurityConfig, ConfigLoader, LogLevel, ExportFormat, SecurityMode,
+    get_config, reload_config
 )
 
 
-class TestConfigModels:
-    """Test individual configuration models."""
+class TestDagsterConfig:
+    """Test cases for DagsterConfig."""
     
-    def test_dagster_config_defaults(self):
-        """Test DagsterConfig default values."""
+    def test_default_values(self):
+        """Test default DagsterConfig values."""
         config = DagsterConfig()
-        assert config.project_dir == Path.cwd()
-        assert config.module_name is None
-        assert config.repository_name is None
-        assert config.assets_module == "assets"
-        assert config.jobs_module == "jobs"
+        assert config.repository_name == "daglab_repository"
+        assert config.job_name == "daglab_job"
+        assert config.run_launcher == "default"
+        assert config.storage["filesystem"]["base_dir"] == "dagster_storage"
     
-    def test_dagster_config_path_resolution(self):
-        """Test that paths are resolved to absolute."""
-        config = DagsterConfig(project_dir=Path("../relative/path"))
-        assert config.project_dir.is_absolute()
+    def test_path_expansion(self):
+        """Test home directory expansion."""
+        config = DagsterConfig(home="~/test_dagster")
+        assert str(config.home).startswith(str(Path.home()))
+        assert str(config.home).endswith("test_dagster")
     
-    def test_marimo_config_defaults(self):
-        """Test MarimoConfig default values."""
-        config = MarimoConfig()
-        assert config.port_range_start == 2718
-        assert config.port_range_end == 2818
-        assert config.auto_reload is True
-        assert config.theme == "light"
-        assert config.layout_file is None
-    
-    def test_marimo_config_port_validation(self):
-        """Test port range validation."""
-        # Valid range
-        config = MarimoConfig(port_range_start=3000, port_range_end=3100)
-        assert config.port_range_start == 3000
-        assert config.port_range_end == 3100
-        
-        # Invalid range
-        with pytest.raises(ValidationError):
-            MarimoConfig(port_range_start=3000, port_range_end=2999)
-    
-    def test_defaults_config(self):
-        """Test DefaultsConfig values."""
-        config = DefaultsConfig()
-        assert config.author is None
-        assert config.email is None
-        assert config.license == "MIT"
-        assert config.python_version == "3.10"
-        assert config.tags == []
-        
-        # With custom values
-        config = DefaultsConfig(
-            author="John Doe",
-            email="john@example.com",
-            tags=["test", "example"]
+    def test_custom_values(self):
+        """Test custom DagsterConfig values."""
+        config = DagsterConfig(
+            repository_name="custom_repo",
+            job_name="custom_job",
+            storage={"s3": {"bucket": "my-bucket"}}
         )
-        assert config.author == "John Doe"
-        assert config.email == "john@example.com"
-        assert config.tags == ["test", "example"]
+        assert config.repository_name == "custom_repo"
+        assert config.job_name == "custom_job"
+        assert config.storage["s3"]["bucket"] == "my-bucket"
+
+
+class TestMarimoConfig:
+    """Test cases for MarimoConfig."""
     
-    def test_performance_config(self):
-        """Test PerformanceConfig values and validation."""
+    def test_default_values(self):
+        """Test default MarimoConfig values."""
+        config = MarimoConfig()
+        assert config.host == "127.0.0.1"
+        assert config.port == 2718
+        assert config.auto_open is True
+        assert config.theme == "light"
+        assert config.autosave is True
+        assert config.autosave_interval == 30
+    
+    def test_port_validation(self):
+        """Test port number validation."""
+        with pytest.raises(ValueError):
+            MarimoConfig(port=70000)  # Too high
+        
+        with pytest.raises(ValueError):
+            MarimoConfig(port=0)  # Too low
+        
+        # Valid port
+        config = MarimoConfig(port=8080)
+        assert config.port == 8080
+    
+    def test_theme_validation(self):
+        """Test theme validation."""
+        # Valid themes
+        for theme in ["light", "dark", "auto"]:
+            config = MarimoConfig(theme=theme)
+            assert config.theme == theme
+        
+        # Invalid theme
+        with pytest.raises(ValueError):
+            MarimoConfig(theme="invalid")
+    
+    def test_notebook_dir_creation(self):
+        """Test notebook directory creation."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            notebook_dir = Path(tmpdir) / "notebooks"
+            config = MarimoConfig(notebook_dir=notebook_dir)
+            assert notebook_dir.exists()
+
+
+class TestDefaultsConfig:
+    """Test cases for DefaultsConfig."""
+    
+    def test_default_values(self):
+        """Test default DefaultsConfig values."""
+        config = DefaultsConfig()
+        assert config.execution_timeout == 300
+        assert config.retry_count == 3
+        assert config.retry_delay == 1.0
+        assert config.batch_size == 100
+        assert config.parallelism == 4
+    
+    def test_validation(self):
+        """Test validation constraints."""
+        # Valid values
+        config = DefaultsConfig(
+            execution_timeout=600,
+            retry_count=5,
+            retry_delay=2.5,
+            batch_size=200,
+            parallelism=8
+        )
+        assert config.execution_timeout == 600
+        
+        # Invalid values
+        with pytest.raises(ValueError):
+            DefaultsConfig(execution_timeout=0)
+        
+        with pytest.raises(ValueError):
+            DefaultsConfig(retry_delay=0.05)
+        
+        with pytest.raises(ValueError):
+            DefaultsConfig(parallelism=0)
+
+
+class TestPerformanceConfig:
+    """Test cases for PerformanceConfig."""
+    
+    def test_default_values(self):
+        """Test default PerformanceConfig values."""
         config = PerformanceConfig()
-        assert config.max_workers == 4
-        assert config.timeout == 300
         assert config.cache_enabled is True
-        assert config.cache_dir == Path.home() / ".cache" / "daglab"
-        
-        # Test validation
-        with pytest.raises(ValidationError):
-            PerformanceConfig(max_workers=0)
-        
-        with pytest.raises(ValidationError):
-            PerformanceConfig(timeout=-1)
+        assert config.cache_size == 1000
+        assert config.cache_ttl == 3600
+        assert config.memory_limit == "4G"
+        assert config.cpu_limit is None
+        assert config.enable_profiling is False
     
-    def test_export_config(self):
-        """Test ExportConfig values."""
+    def test_memory_limit_validation(self):
+        """Test memory limit validation."""
+        # Valid formats
+        for limit in ["512M", "2G", "1024K", "8"]:
+            config = PerformanceConfig(memory_limit=limit)
+            assert config.memory_limit == limit
+        
+        # Invalid format
+        with pytest.raises(ValueError):
+            PerformanceConfig(memory_limit="invalid")
+
+
+class TestExportConfig:
+    """Test cases for ExportConfig."""
+    
+    def test_default_values(self):
+        """Test default ExportConfig values."""
         config = ExportConfig()
-        assert ExportFormat.PYTHON in config.formats
-        assert ExportFormat.HTML in config.formats
-        assert config.output_dir == Path.cwd() / "exports"
+        assert config.default_format == ExportFormat.YAML
         assert config.include_metadata is True
-        assert config.minify is False
+        assert config.pretty_print is True
+        assert config.compression is None
     
-    def test_logging_config(self):
-        """Test LoggingConfig values."""
+    def test_compression_validation(self):
+        """Test compression type validation."""
+        # Valid compression types
+        for comp in ["gzip", "zip", None]:
+            config = ExportConfig(compression=comp)
+            assert config.compression == comp
+        
+        # Invalid compression type
+        with pytest.raises(ValueError):
+            ExportConfig(compression="rar")
+    
+    def test_output_dir_creation(self):
+        """Test output directory creation."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "exports"
+            config = ExportConfig(output_dir=output_dir)
+            assert output_dir.exists()
+
+
+class TestLoggingConfig:
+    """Test cases for LoggingConfig."""
+    
+    def test_default_values(self):
+        """Test default LoggingConfig values."""
         config = LoggingConfig()
         assert config.level == LogLevel.INFO
-        assert config.file is None
-        assert config.json_format is False
-        assert config.rotation == "10MB"
-        assert config.retention == 7
-        
-        # With custom values
-        config = LoggingConfig(
-            level=LogLevel.DEBUG,
-            file=Path("/var/log/daglab.log"),
-            json_format=True
-        )
-        assert config.level == LogLevel.DEBUG
-        assert config.file == Path("/var/log/daglab.log")
-        assert config.json_format is True
+        assert config.console_output is True
+        assert config.structured is False
+        assert config.backup_count == 5
+        assert config.max_file_size == "10M"
     
-    def test_telemetry_config(self):
-        """Test TelemetryConfig values."""
+    def test_log_level_enum(self):
+        """Test log level enumeration."""
+        for level in LogLevel:
+            config = LoggingConfig(level=level)
+            assert config.level == level
+    
+    def test_file_size_validation(self):
+        """Test file size format validation."""
+        # Valid formats
+        for size in ["100K", "50M", "1G"]:
+            config = LoggingConfig(max_file_size=size)
+            assert config.max_file_size == size
+        
+        # Invalid format
+        with pytest.raises(ValueError):
+            LoggingConfig(max_file_size="invalid")
+
+
+class TestTelemetryConfig:
+    """Test cases for TelemetryConfig."""
+    
+    def test_default_values(self):
+        """Test default TelemetryConfig values."""
         config = TelemetryConfig()
         assert config.enabled is False
-        assert config.level == TelemetryLevel.ANONYMOUS
-        assert config.endpoint is None
-        assert config.batch_size == 100
+        assert config.sample_rate == 1.0
+        assert config.include_system_info is True
         assert config.flush_interval == 60
-        
-        # Test validation
-        with pytest.raises(ValidationError):
-            TelemetryConfig(batch_size=0)
     
-    def test_security_config(self):
-        """Test SecurityConfig values."""
+    def test_sample_rate_validation(self):
+        """Test sample rate validation."""
+        # Valid rates
+        for rate in [0.0, 0.5, 1.0]:
+            config = TelemetryConfig(sample_rate=rate)
+            assert config.sample_rate == rate
+        
+        # Invalid rates
+        with pytest.raises(ValueError):
+            TelemetryConfig(sample_rate=1.5)
+        
+        with pytest.raises(ValueError):
+            TelemetryConfig(sample_rate=-0.1)
+
+
+class TestSecurityConfig:
+    """Test cases for SecurityConfig."""
+    
+    def test_default_values(self):
+        """Test default SecurityConfig values."""
         config = SecurityConfig()
-        assert config.sandbox_enabled is True
-        assert "dagster" in config.allowed_imports
-        assert "marimo" in config.allowed_imports
-        assert config.restricted_paths == []
-        assert config.validate_inputs is True
-        assert config.max_file_size == 100 * 1024 * 1024
+        assert config.mode == SecurityMode.MODERATE
+        assert config.enable_ssl is False
+        assert config.enable_auth is False
+        assert config.encrypt_storage is False
+        assert "localhost" in config.allowed_hosts
+        assert "127.0.0.1" in config.allowed_hosts
+    
+    def test_ssl_validation(self):
+        """Test SSL configuration validation."""
+        # SSL disabled - no validation
+        config = SecurityConfig(
+            enable_ssl=False,
+            ssl_cert=Path("/nonexistent/cert.pem")
+        )
+        assert config.ssl_cert == Path("/nonexistent/cert.pem")
+        
+        # SSL enabled - requires valid paths
+        with tempfile.NamedTemporaryFile(suffix=".pem") as cert:
+            config = SecurityConfig(
+                enable_ssl=True,
+                ssl_cert=Path(cert.name)
+            )
+            assert config.ssl_cert == Path(cert.name)
 
 
 class TestDaglabConfig:
-    """Test main DaglabConfig class."""
+    """Test cases for main DaglabConfig."""
     
-    def test_default_config(self):
-        """Test default configuration values."""
+    def test_default_values(self):
+        """Test default DaglabConfig values."""
         config = DaglabConfig()
-        assert config.version == "1.0"
-        assert config.notebooks_dir == Path("dagster/notebooks").resolve()
+        assert config.project_name == "daglab"
+        assert config.version == "0.1.0"
+        assert config.environment == "development"
+        assert config.debug is False
+        
+        # Check sub-configs
         assert isinstance(config.dagster, DagsterConfig)
         assert isinstance(config.marimo, MarimoConfig)
         assert isinstance(config.defaults, DefaultsConfig)
@@ -174,285 +289,265 @@ class TestDaglabConfig:
         assert isinstance(config.telemetry, TelemetryConfig)
         assert isinstance(config.security, SecurityConfig)
     
-    def test_environment_variables(self, monkeypatch):
-        """Test loading from environment variables."""
+    def test_environment_validation(self):
+        """Test environment validation."""
+        # Valid environments
+        for env in ["development", "staging", "production", "test"]:
+            config = DaglabConfig(environment=env)
+            assert config.environment == env
+        
+        # Invalid environment
+        with pytest.raises(ValueError):
+            DaglabConfig(environment="invalid")
+    
+    def test_env_var_override(self):
+        """Test environment variable overrides."""
         # Set environment variables
-        monkeypatch.setenv("daglab_version", "2.0")
-        monkeypatch.setenv("daglab_notebooks_dir", "/custom/notebooks")
-        monkeypatch.setenv("daglab_dagster__assets_module", "custom_assets")
-        monkeypatch.setenv("daglab_marimo__port_range_start", "4000")
-        monkeypatch.setenv("daglab_marimo__port_range_end", "4100")
-        monkeypatch.setenv("daglab_logging__level", "DEBUG")
-        monkeypatch.setenv("daglab_performance__max_workers", "8")
+        os.environ["DAGLAB_PROJECT_NAME"] = "test_project"
+        os.environ["DAGLAB_DEBUG"] = "true"
+        os.environ["DAGLAB_DEFAULTS__EXECUTION_TIMEOUT"] = "600"
+        os.environ["DAGLAB_MARIMO__PORT"] = "8888"
         
-        config = DaglabConfig()
-        assert config.version == "2.0"
-        assert config.notebooks_dir == Path("/custom/notebooks")
-        assert config.dagster.assets_module == "custom_assets"
-        assert config.marimo.port_range_start == 4000
-        assert config.marimo.port_range_end == 4100
-        assert config.logging.level == LogLevel.DEBUG
-        assert config.performance.max_workers == 8
+        try:
+            config = DaglabConfig()
+            assert config.project_name == "test_project"
+            assert config.debug is True
+            assert config.defaults.execution_timeout == 600
+            assert config.marimo.port == 8888
+        finally:
+            # Cleanup
+            del os.environ["DAGLAB_PROJECT_NAME"]
+            del os.environ["DAGLAB_DEBUG"]
+            del os.environ["DAGLAB_DEFAULTS__EXECUTION_TIMEOUT"]
+            del os.environ["DAGLAB_MARIMO__PORT"]
     
-    def test_nested_config_creation(self):
-        """Test creating config with nested values."""
-        config = DaglabConfig(
-            version="1.1",
-            dagster=DagsterConfig(
-                project_dir=Path("/custom/project"),
-                assets_module="my_assets"
-            ),
-            marimo=MarimoConfig(
-                port_range_start=5000,
-                port_range_end=5100,
-                theme="dark"
-            )
-        )
+    def test_from_yaml_file(self):
+        """Test loading configuration from YAML file."""
+        yaml_content = """
+        project_name: yaml_test
+        version: 1.0.0
+        environment: production
+        debug: false
         
-        assert config.version == "1.1"
-        assert config.dagster.project_dir == Path("/custom/project")
-        assert config.dagster.assets_module == "my_assets"
-        assert config.marimo.port_range_start == 5000
-        assert config.marimo.theme == "dark"
-
-
-class TestConfigLoading:
-    """Test configuration loading functionality."""
+        dagster:
+          repository_name: yaml_repo
+          job_name: yaml_job
+        
+        marimo:
+          port: 3000
+          theme: dark
+        
+        logging:
+          level: warning
+          structured: true
+        """
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            f.write(yaml_content)
+            f.flush()
+            
+            try:
+                config = DaglabConfig.from_file(f.name)
+                assert config.project_name == "yaml_test"
+                assert config.version == "1.0.0"
+                assert config.environment == "production"
+                assert config.dagster.repository_name == "yaml_repo"
+                assert config.marimo.port == 3000
+                assert config.marimo.theme == "dark"
+                assert config.logging.level == LogLevel.WARNING
+                assert config.logging.structured is True
+            finally:
+                os.unlink(f.name)
     
-    def test_find_config_file_custom(self, tmp_path):
-        """Test finding custom config file."""
-        config_file = tmp_path / "custom.yaml"
-        config_file.write_text("version: '1.0'")
-        
-        found = find_config_file(config_file)
-        assert found == config_file
-        
-        # Non-existent custom file
-        found = find_config_file(tmp_path / "nonexistent.yaml")
-        assert found is None
-    
-    def test_find_config_file_standard_locations(self, tmp_path, monkeypatch):
-        """Test finding config in standard locations."""
-        # Change working directory to temp path
-        monkeypatch.chdir(tmp_path)
-        
-        # No config files
-        found = find_config_file()
-        assert found is None
-        
-        # Create config in current directory
-        config_file = tmp_path / "daglab.yaml"
-        config_file.write_text("version: '1.0'")
-        
-        found = find_config_file()
-        assert found == config_file
-    
-    def test_load_config_file(self, tmp_path):
-        """Test loading configuration from file."""
-        config_file = tmp_path / "test.yaml"
-        config_data = {
-            "version": "1.1",
-            "notebooks_dir": "/custom/notebooks",
-            "dagster": {
-                "assets_module": "custom_assets"
+    def test_from_json_file(self):
+        """Test loading configuration from JSON file."""
+        json_content = {
+            "project_name": "json_test",
+            "version": "2.0.0",
+            "debug": True,
+            "performance": {
+                "cache_enabled": False,
+                "cache_size": 500
             }
         }
         
-        with open(config_file, "w") as f:
-            yaml.dump(config_data, f)
-        
-        loaded = load_config_file(config_file)
-        assert loaded["version"] == "1.1"
-        assert loaded["notebooks_dir"] == "/custom/notebooks"
-        assert loaded["dagster"]["assets_module"] == "custom_assets"
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            json.dump(json_content, f)
+            f.flush()
+            
+            try:
+                config = DaglabConfig.from_file(f.name)
+                assert config.project_name == "json_test"
+                assert config.version == "2.0.0"
+                assert config.debug is True
+                assert config.performance.cache_enabled is False
+                assert config.performance.cache_size == 500
+            finally:
+                os.unlink(f.name)
     
-    def test_load_config_file_invalid(self, tmp_path):
-        """Test loading invalid configuration files."""
-        # Non-YAML file
-        config_file = tmp_path / "invalid.yaml"
-        config_file.write_text("not valid yaml: [")
+    def test_to_file_yaml(self):
+        """Test saving configuration to YAML file."""
+        config = DaglabConfig(
+            project_name="save_test",
+            environment="staging",
+            marimo=MarimoConfig(port=4000)
+        )
         
-        with pytest.raises(ValueError, match="Failed to parse YAML"):
-            load_config_file(config_file)
-        
-        # Non-dictionary YAML
-        config_file = tmp_path / "list.yaml"
-        config_file.write_text("- item1\n- item2")
-        
-        with pytest.raises(ValueError, match="must contain a YAML dictionary"):
-            load_config_file(config_file)
+        with tempfile.NamedTemporaryFile(suffix='.yaml', delete=False) as f:
+            try:
+                config.to_file(f.name)
+                
+                # Load and verify
+                with open(f.name, 'r') as rf:
+                    data = yaml.safe_load(rf)
+                    assert data['project_name'] == "save_test"
+                    assert data['environment'] == "staging"
+                    assert data['marimo']['port'] == 4000
+            finally:
+                os.unlink(f.name)
     
     def test_merge_configs(self):
-        """Test configuration merging."""
-        base = {
-            "version": "1.0",
-            "dagster": {
-                "assets_module": "assets",
-                "jobs_module": "jobs"
-            },
-            "marimo": {
-                "port_range_start": 2718
-            }
-        }
-        
-        override = {
-            "version": "1.1",
-            "dagster": {
-                "assets_module": "custom_assets"
-            },
-            "marimo": {
-                "theme": "dark"
-            },
-            "new_field": "value"
-        }
-        
-        result = merge_configs(base, override)
-        
-        assert result["version"] == "1.1"
-        assert result["dagster"]["assets_module"] == "custom_assets"
-        assert result["dagster"]["jobs_module"] == "jobs"  # Preserved from base
-        assert result["marimo"]["port_range_start"] == 2718  # Preserved from base
-        assert result["marimo"]["theme"] == "dark"
-        assert result["new_field"] == "value"
-    
-    def test_load_config_hierarchy(self, tmp_path, monkeypatch):
-        """Test complete configuration loading hierarchy."""
-        # Create config file
-        config_file = tmp_path / "daglab.yaml"
-        config_data = {
-            "version": "1.0",
-            "notebooks_dir": "from_file",
-            "dagster": {
-                "assets_module": "file_assets"
-            }
-        }
-        with open(config_file, "w") as f:
-            yaml.dump(config_data, f)
-        
-        # Set environment variable (higher priority)
-        monkeypatch.setenv("daglab_notebooks_dir", "from_env")
-        
-        # CLI override (highest priority)
-        cli_overrides = {
-            "version": "2.0",
-            "dagster": {
-                "jobs_module": "cli_jobs"
-            }
-        }
-        
-        # Load configuration
-        config = load_config(config_file, cli_overrides)
-        
-        # Check hierarchy: CLI > ENV > File > Defaults
-        assert config.version == "2.0"  # From CLI
-        assert str(config.notebooks_dir).endswith("from_env")  # From ENV
-        assert config.dagster.assets_module == "file_assets"  # From file
-        assert config.dagster.jobs_module == "cli_jobs"  # From CLI
-        assert config.marimo.port_range_start == 2718  # Default
-    
-    def test_save_config(self, tmp_path):
-        """Test saving configuration to file."""
-        config = DaglabConfig(
-            version="1.2",
-            dagster=DagsterConfig(assets_module="test_assets"),
-            marimo=MarimoConfig(theme="dark")
+        """Test merging configurations."""
+        base_config = DaglabConfig(
+            project_name="base",
+            debug=False,
+            marimo=MarimoConfig(port=2718, theme="light")
         )
         
-        output_file = tmp_path / "output.yaml"
-        save_config(config, output_file, comments=True)
+        updates = {
+            "project_name": "merged",
+            "debug": True,
+            "marimo": {"theme": "dark"},
+            "logging": {"level": "debug"}
+        }
         
-        assert output_file.exists()
-        
-        # Load and verify
-        with open(output_file) as f:
-            content = f.read()
-            assert "# daglab configuration file" in content
-            assert "Version: 1.2" in content
-        
-        loaded = yaml.safe_load(output_file.read_text())
-        assert loaded["version"] == "1.2"
-        assert loaded["dagster"]["assets_module"] == "test_assets"
-        assert loaded["marimo"]["theme"] == "dark"
+        merged = base_config.merge(updates)
+        assert merged.project_name == "merged"
+        assert merged.debug is True
+        assert merged.marimo.port == 2718  # Preserved
+        assert merged.marimo.theme == "dark"  # Updated
+        assert merged.logging.level == LogLevel.DEBUG
 
 
-class TestGlobalConfig:
-    """Test global configuration management."""
+class TestConfigLoader:
+    """Test cases for ConfigLoader."""
     
-    def test_get_default_config(self):
-        """Test getting default configuration."""
-        config = get_default_config()
+    def test_default_loading(self):
+        """Test loading with defaults."""
+        loader = ConfigLoader()
+        config = loader.load()
         assert isinstance(config, DaglabConfig)
-        assert config.version == "1.0"
+        assert config.project_name == "daglab"
     
-    def test_get_config_singleton(self):
-        """Test configuration singleton behavior."""
-        # Clear any existing config
-        set_config(None)
+    def test_specific_file_loading(self):
+        """Test loading from specific file."""
+        config_data = {
+            "project_name": "loader_test",
+            "version": "3.0.0"
+        }
         
-        # First call creates config
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.dump(config_data, f)
+            f.flush()
+            
+            try:
+                loader = ConfigLoader(f.name)
+                config = loader.load()
+                assert config.project_name == "loader_test"
+                assert config.version == "3.0.0"
+            finally:
+                os.unlink(f.name)
+    
+    def test_env_var_config_path(self):
+        """Test loading from environment variable path."""
+        config_data = {"project_name": "env_path_test"}
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.dump(config_data, f)
+            f.flush()
+            
+            os.environ["DAGLAB_CONFIG"] = f.name
+            
+            try:
+                loader = ConfigLoader()
+                config = loader.load()
+                assert config.project_name == "env_path_test"
+            finally:
+                del os.environ["DAGLAB_CONFIG"]
+                os.unlink(f.name)
+    
+    def test_create_template(self):
+        """Test creating configuration templates."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Development template
+            dev_path = Path(tmpdir) / "dev_config.yaml"
+            ConfigLoader.create_template(dev_path, environment="development")
+            assert dev_path.exists()
+            
+            dev_config = DaglabConfig.from_file(dev_path)
+            assert dev_config.environment == "development"
+            assert dev_config.debug is True
+            assert dev_config.logging.level == LogLevel.DEBUG
+            
+            # Production template
+            prod_path = Path(tmpdir) / "prod_config.yaml"
+            ConfigLoader.create_template(prod_path, environment="production")
+            assert prod_path.exists()
+            
+            prod_config = DaglabConfig.from_file(prod_path)
+            assert prod_config.environment == "production"
+            assert prod_config.debug is False
+            assert prod_config.logging.level == LogLevel.WARNING
+            assert prod_config.security.mode == SecurityMode.STRICT
+    
+    def test_config_info(self):
+        """Test getting configuration information."""
+        info = ConfigLoader.get_config_info()
+        assert "loaded_from" in info
+        assert "environment" in info
+        assert "debug" in info
+        assert "env_vars" in info
+        assert "search_paths" in info
+        assert isinstance(info["search_paths"], list)
+
+
+class TestConvenienceFunctions:
+    """Test cases for convenience functions."""
+    
+    def test_get_config(self):
+        """Test get_config function."""
         config1 = get_config()
-        assert isinstance(config1, DaglabConfig)
-        
-        # Second call returns same instance
         config2 = get_config()
-        assert config2 is config1
+        assert config1 is config2  # Should be cached
+        assert isinstance(config1, DaglabConfig)
     
-    def test_set_config(self):
-        """Test setting global configuration."""
-        custom_config = DaglabConfig(version="2.0")
-        set_config(custom_config)
-        
-        retrieved = get_config()
-        assert retrieved is custom_config
-        assert retrieved.version == "2.0"
+    def test_reload_config(self):
+        """Test reload_config function."""
+        config1 = get_config()
+        config2 = reload_config()
+        assert isinstance(config2, DaglabConfig)
+        # After reload, get_config should return new instance
+        config3 = get_config()
+        assert config3 is not config1  # Cache cleared
 
 
-class TestEdgeCases:
-    """Test edge cases and error conditions."""
+@pytest.fixture
+def clean_env():
+    """Fixture to ensure clean environment variables."""
+    # Store original env vars
+    original = {k: v for k, v in os.environ.items() if k.startswith("DAGLAB_")}
     
-    def test_invalid_enum_values(self):
-        """Test invalid enum values."""
-        with pytest.raises(ValidationError):
-            LoggingConfig(level="INVALID")
-        
-        with pytest.raises(ValidationError):
-            TelemetryConfig(level="invalid")
-        
-        with pytest.raises(ValidationError):
-            ExportConfig(formats=["invalid_format"])
+    # Clear DAGLAB_ env vars
+    for key in list(os.environ.keys()):
+        if key.startswith("DAGLAB_"):
+            del os.environ[key]
     
-    def test_path_validation(self):
-        """Test path validation and resolution."""
-        # Relative paths should be resolved
-        config = DaglabConfig(notebooks_dir="relative/path")
-        assert config.notebooks_dir.is_absolute()
-        
-        # Same for nested configs
-        config = PerformanceConfig(cache_dir="./cache")
-        assert config.cache_dir.is_absolute()
+    yield
     
-    def test_numeric_validation(self):
-        """Test numeric field validation."""
-        # Port ranges
-        with pytest.raises(ValidationError):
-            MarimoConfig(port_range_start=0)  # Too low
-        
-        with pytest.raises(ValidationError):
-            MarimoConfig(port_range_end=70000)  # Too high
-        
-        # Worker counts
-        with pytest.raises(ValidationError):
-            PerformanceConfig(max_workers=0)
-        
-        # Timeouts
-        with pytest.raises(ValidationError):
-            PerformanceConfig(timeout=0)
-    
-    def test_empty_config_file(self, tmp_path):
-        """Test loading empty config file."""
-        config_file = tmp_path / "empty.yaml"
-        config_file.write_text("")
-        
-        # Should not raise, just use defaults
-        config = load_config(config_file)
-        assert config.version == "1.0"
+    # Restore original env vars
+    for key, value in original.items():
+        os.environ[key] = value
+
+
+# Mark all test classes to use clean_env fixture
+pytestmark = pytest.mark.usefixtures("clean_env")

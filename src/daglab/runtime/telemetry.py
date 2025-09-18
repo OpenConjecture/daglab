@@ -1,401 +1,387 @@
-"""Basic telemetry client for daglab runtime monitoring.
-
-Provides lightweight telemetry collection for performance monitoring,
-usage tracking, and error reporting.
-"""
+"""Basic telemetry client stub for performance metrics and usage tracking."""
 
 import json
 import os
 import time
-import uuid
-from contextlib import contextmanager
-from dataclasses import dataclass, asdict
-from datetime import datetime
-from enum import Enum
-from pathlib import Path
-from typing import Any, Dict, Optional, List, Callable
 from collections import defaultdict
-import threading
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
+from uuid import uuid4
 
 from daglab.runtime.logging import get_logger
-from daglab.config import settings
-
-
-class TelemetryLevel(Enum):
-    """Telemetry collection levels."""
-    DISABLED = "disabled"
-    MINIMAL = "minimal"
-    STANDARD = "standard"
-    DETAILED = "detailed"
-
-
-class MetricType(Enum):
-    """Types of metrics to track."""
-    COUNTER = "counter"
-    GAUGE = "gauge"
-    HISTOGRAM = "histogram"
-    TIMER = "timer"
-
-
-@dataclass
-class TelemetryEvent:
-    """Represents a telemetry event."""
-    event_id: str
-    event_type: str
-    timestamp: float
-    duration_ms: Optional[float] = None
-    metadata: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for serialization."""
-        data = asdict(self)
-        data['timestamp_iso'] = datetime.fromtimestamp(self.timestamp).isoformat()
-        return data
 
 
 @dataclass
 class Metric:
-    """Represents a metric data point."""
+    """Represents a single metric measurement."""
     name: str
     value: float
-    metric_type: MetricType
-    timestamp: float
-    tags: Optional[Dict[str, str]] = None
-    unit: Optional[str] = None
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for serialization."""
-        data = asdict(self)
-        data['metric_type'] = self.metric_type.value
-        data['timestamp_iso'] = datetime.fromtimestamp(self.timestamp).isoformat()
-        return data
+    timestamp: float = field(default_factory=time.time)
+    tags: Dict[str, str] = field(default_factory=dict)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class Event:
+    """Represents a telemetry event."""
+    name: str
+    timestamp: float = field(default_factory=time.time)
+    properties: Dict[str, Any] = field(default_factory=dict)
+    user_id: Optional[str] = None
+    session_id: Optional[str] = None
 
 
 class TelemetryClient:
-    """Lightweight telemetry client for daglab."""
+    """Basic telemetry client for metrics collection and usage tracking."""
     
-    def __init__(self):
-        """Initialize the telemetry client."""
-        self.logger = get_logger('daglab.telemetry')
-        self.enabled = self._check_enabled()
-        self.level = self._get_telemetry_level()
-        self.session_id = str(uuid.uuid4())
+    def __init__(
+        self,
+        enabled: bool = True,
+        opt_in: bool = False,
+        service_name: str = "daglab",
+        buffer_size: int = 1000,
+        flush_interval: float = 60.0,
+        storage_path: Optional[Path] = None
+    ):
+        self.enabled = enabled and opt_in
+        self.service_name = service_name
+        self.buffer_size = buffer_size
+        self.flush_interval = flush_interval
+        self.storage_path = storage_path or Path.home() / ".daglab" / "telemetry"
+        
+        self.logger = get_logger(f"{service_name}.telemetry")
+        self.session_id = str(uuid4())
         self.start_time = time.time()
         
-        # In-memory storage for metrics
-        self._metrics: Dict[str, List[float]] = defaultdict(list)
-        self._events: List[TelemetryEvent] = []
-        self._lock = threading.Lock()
+        # Buffers for metrics and events
+        self._metrics_buffer: List[Metric] = []
+        self._events_buffer: List[Event] = []
+        self._timers: Dict[str, float] = {}
+        self._counters: Dict[str, int] = defaultdict(int)
         
-        # Initialize storage
-        if self.enabled:
-            self._init_storage()
-        
+        # Create storage directory if enabled
+        if self.enabled and self.storage_path:
+            self.storage_path.mkdir(parents=True, exist_ok=True)
+            
         self.logger.info(
-            f"Telemetry initialized",
-            extra={
-                'session_id': self.session_id,
-                'enabled': self.enabled,
-                'level': self.level.value
-            }
+            f"Telemetry client initialized (enabled={self.enabled}, opt_in={opt_in})"
         )
     
-    def _check_enabled(self) -> bool:
+    def is_enabled(self) -> bool:
         """Check if telemetry is enabled."""
-        # Check environment variable
-        env_disabled = os.environ.get('DAGLAB_TELEMETRY_DISABLED', '').lower() == 'true'
-        if env_disabled:
-            return False
-        
-        # Check settings
-        return getattr(settings, 'telemetry_enabled', True)
-    
-    def _get_telemetry_level(self) -> TelemetryLevel:
-        """Get the telemetry level from configuration."""
-        level_str = getattr(settings, 'telemetry_level', 'standard').lower()
-        try:
-            return TelemetryLevel(level_str)
-        except ValueError:
-            self.logger.warning(f"Invalid telemetry level: {level_str}, using standard")
-            return TelemetryLevel.STANDARD
-    
-    def _init_storage(self) -> None:
-        """Initialize telemetry storage."""
-        telemetry_dir = Path(settings.data_dir) / 'telemetry'
-        telemetry_dir.mkdir(parents=True, exist_ok=True)
-        self.telemetry_file = telemetry_dir / f"session_{self.session_id}.jsonl"
-    
-    def _should_collect(self, level: TelemetryLevel) -> bool:
-        """Check if data should be collected based on current level."""
-        if not self.enabled:
-            return False
-        
-        level_order = {
-            TelemetryLevel.DISABLED: 0,
-            TelemetryLevel.MINIMAL: 1,
-            TelemetryLevel.STANDARD: 2,
-            TelemetryLevel.DETAILED: 3
-        }
-        
-        return level_order[self.level] >= level_order[level]
-    
-    def track_event(
-        self,
-        event_type: str,
-        metadata: Optional[Dict[str, Any]] = None,
-        level: TelemetryLevel = TelemetryLevel.STANDARD
-    ) -> str:
-        """Track a telemetry event."""
-        if not self._should_collect(level):
-            return ""
-        
-        event = TelemetryEvent(
-            event_id=str(uuid.uuid4()),
-            event_type=event_type,
-            timestamp=time.time(),
-            metadata=metadata
-        )
-        
-        with self._lock:
-            self._events.append(event)
-        
-        # Log if detailed
-        if self.level == TelemetryLevel.DETAILED:
-            self.logger.debug(f"Telemetry event: {event_type}", extra=event.to_dict())
-        
-        # Write to file if enabled
-        if hasattr(self, 'telemetry_file'):
-            self._write_event(event)
-        
-        return event.event_id
-    
-    @contextmanager
-    def track_operation(
-        self,
-        operation_name: str,
-        metadata: Optional[Dict[str, Any]] = None,
-        level: TelemetryLevel = TelemetryLevel.STANDARD
-    ):
-        """Context manager to track operation duration."""
-        if not self._should_collect(level):
-            yield
-            return
-        
-        start_time = time.time()
-        event_id = self.track_event(f"{operation_name}_started", metadata, level)
-        
-        try:
-            yield
-            # Success
-            duration_ms = (time.time() - start_time) * 1000
-            self.track_event(
-                f"{operation_name}_completed",
-                {
-                    **(metadata or {}),
-                    'duration_ms': duration_ms,
-                    'success': True,
-                    'start_event_id': event_id
-                },
-                level
-            )
-            self.record_metric(
-                f"{operation_name}_duration",
-                duration_ms,
-                MetricType.TIMER,
-                unit='ms'
-            )
-        except Exception as e:
-            # Failure
-            duration_ms = (time.time() - start_time) * 1000
-            self.track_event(
-                f"{operation_name}_failed",
-                {
-                    **(metadata or {}),
-                    'duration_ms': duration_ms,
-                    'success': False,
-                    'error': str(e),
-                    'error_type': type(e).__name__,
-                    'start_event_id': event_id
-                },
-                level
-            )
-            self.record_metric(
-                f"{operation_name}_failures",
-                1,
-                MetricType.COUNTER
-            )
-            raise
+        return self.enabled
     
     def record_metric(
         self,
         name: str,
         value: float,
-        metric_type: MetricType = MetricType.GAUGE,
         tags: Optional[Dict[str, str]] = None,
-        unit: Optional[str] = None,
-        level: TelemetryLevel = TelemetryLevel.STANDARD
+        metadata: Optional[Dict[str, Any]] = None
     ) -> None:
-        """Record a metric value."""
-        if not self._should_collect(level):
+        """Record a single metric."""
+        if not self.enabled:
             return
         
         metric = Metric(
             name=name,
             value=value,
-            metric_type=metric_type,
-            timestamp=time.time(),
-            tags=tags,
-            unit=unit
+            tags=tags or {},
+            metadata=metadata or {}
         )
         
-        with self._lock:
-            self._metrics[name].append(value)
+        self._metrics_buffer.append(metric)
         
-        # Log metric via logging system
-        self.logger.info(
-            f"Metric: {name}",
-            extra=metric.to_dict()
-        )
+        # Flush if buffer is full
+        if len(self._metrics_buffer) >= self.buffer_size:
+            self.flush_metrics()
     
-    def increment_counter(
+    def record_event(
         self,
         name: str,
-        value: float = 1,
-        tags: Optional[Dict[str, str]] = None,
-        level: TelemetryLevel = TelemetryLevel.STANDARD
+        properties: Optional[Dict[str, Any]] = None,
+        user_id: Optional[str] = None
     ) -> None:
-        """Increment a counter metric."""
-        self.record_metric(name, value, MetricType.COUNTER, tags, level=level)
-    
-    def set_gauge(
-        self,
-        name: str,
-        value: float,
-        tags: Optional[Dict[str, str]] = None,
-        unit: Optional[str] = None,
-        level: TelemetryLevel = TelemetryLevel.STANDARD
-    ) -> None:
-        """Set a gauge metric."""
-        self.record_metric(name, value, MetricType.GAUGE, tags, unit, level)
-    
-    def record_histogram(
-        self,
-        name: str,
-        value: float,
-        tags: Optional[Dict[str, str]] = None,
-        unit: Optional[str] = None,
-        level: TelemetryLevel = TelemetryLevel.DETAILED
-    ) -> None:
-        """Record a histogram metric."""
-        self.record_metric(name, value, MetricType.HISTOGRAM, tags, unit, level)
-    
-    def get_metrics_summary(self) -> Dict[str, Any]:
-        """Get summary of collected metrics."""
-        with self._lock:
-            summary = {}
-            for name, values in self._metrics.items():
-                if values:
-                    summary[name] = {
-                        'count': len(values),
-                        'sum': sum(values),
-                        'avg': sum(values) / len(values),
-                        'min': min(values),
-                        'max': max(values)
-                    }
-            return summary
-    
-    def get_session_info(self) -> Dict[str, Any]:
-        """Get current session information."""
-        uptime_seconds = time.time() - self.start_time
-        return {
-            'session_id': self.session_id,
-            'start_time': datetime.fromtimestamp(self.start_time).isoformat(),
-            'uptime_seconds': uptime_seconds,
-            'uptime_human': self._format_duration(uptime_seconds),
-            'telemetry_enabled': self.enabled,
-            'telemetry_level': self.level.value,
-            'events_tracked': len(self._events),
-            'metrics_tracked': len(self._metrics)
-        }
-    
-    def _format_duration(self, seconds: float) -> str:
-        """Format duration in human-readable format."""
-        if seconds < 60:
-            return f"{seconds:.1f}s"
-        elif seconds < 3600:
-            minutes = seconds / 60
-            return f"{minutes:.1f}m"
-        else:
-            hours = seconds / 3600
-            return f"{hours:.1f}h"
-    
-    def _write_event(self, event: TelemetryEvent) -> None:
-        """Write event to telemetry file."""
-        try:
-            with open(self.telemetry_file, 'a') as f:
-                f.write(json.dumps(event.to_dict()) + '\n')
-        except Exception as e:
-            self.logger.error(f"Failed to write telemetry event: {e}")
-    
-    def flush(self) -> None:
-        """Flush any pending telemetry data."""
+        """Record a telemetry event."""
         if not self.enabled:
             return
         
-        # Log session summary
-        self.logger.info(
-            "Telemetry session summary",
-            extra=self.get_session_info()
+        event = Event(
+            name=name,
+            properties=properties or {},
+            user_id=user_id,
+            session_id=self.session_id
         )
         
-        # Log metrics summary if detailed
-        if self.level == TelemetryLevel.DETAILED:
-            self.logger.info(
-                "Metrics summary",
-                extra={'metrics': self.get_metrics_summary()}
+        self._events_buffer.append(event)
+        
+        # Flush if buffer is full
+        if len(self._events_buffer) >= self.buffer_size:
+            self.flush_events()
+    
+    def increment_counter(self, name: str, value: int = 1) -> None:
+        """Increment a counter metric."""
+        if not self.enabled:
+            return
+        
+        self._counters[name] += value
+        self.record_metric(f"counter.{name}", self._counters[name])
+    
+    @contextmanager
+    def timer(self, name: str, tags: Optional[Dict[str, str]] = None):
+        """Context manager for timing operations."""
+        start_time = time.time()
+        
+        try:
+            yield
+        finally:
+            if self.enabled:
+                duration = time.time() - start_time
+                self.record_metric(
+                    f"timer.{name}",
+                    duration,
+                    tags=tags,
+                    metadata={"unit": "seconds"}
+                )
+    
+    def start_timer(self, name: str) -> None:
+        """Start a named timer."""
+        if self.enabled:
+            self._timers[name] = time.time()
+    
+    def stop_timer(self, name: str) -> Optional[float]:
+        """Stop a named timer and record the duration."""
+        if not self.enabled or name not in self._timers:
+            return None
+        
+        duration = time.time() - self._timers.pop(name)
+        self.record_metric(
+            f"timer.{name}",
+            duration,
+            metadata={"unit": "seconds"}
+        )
+        return duration
+    
+    def gauge(self, name: str, value: float, tags: Optional[Dict[str, str]] = None) -> None:
+        """Record a gauge metric (point-in-time value)."""
+        if self.enabled:
+            self.record_metric(f"gauge.{name}", value, tags=tags)
+    
+    def histogram(
+        self,
+        name: str,
+        value: float,
+        buckets: Optional[List[float]] = None,
+        tags: Optional[Dict[str, str]] = None
+    ) -> None:
+        """Record a histogram metric."""
+        if not self.enabled:
+            return
+        
+        metadata = {}
+        if buckets:
+            # Calculate which bucket the value falls into
+            bucket_index = len([b for b in buckets if value > b])
+            metadata["bucket"] = bucket_index
+            metadata["buckets"] = buckets
+        
+        self.record_metric(f"histogram.{name}", value, tags=tags, metadata=metadata)
+    
+    def flush_metrics(self) -> None:
+        """Flush metrics buffer to storage."""
+        if not self.enabled or not self._metrics_buffer:
+            return
+        
+        try:
+            # Write metrics to file
+            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            metrics_file = self.storage_path / f"metrics_{timestamp}.json"
+            
+            with open(metrics_file, 'w') as f:
+                json.dump(
+                    [self._serialize_metric(m) for m in self._metrics_buffer],
+                    f,
+                    indent=2
+                )
+            
+            self.logger.debug(f"Flushed {len(self._metrics_buffer)} metrics to {metrics_file}")
+            self._metrics_buffer.clear()
+            
+        except Exception as e:
+            self.logger.error(f"Failed to flush metrics: {e}")
+    
+    def flush_events(self) -> None:
+        """Flush events buffer to storage."""
+        if not self.enabled or not self._events_buffer:
+            return
+        
+        try:
+            # Write events to file
+            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            events_file = self.storage_path / f"events_{timestamp}.json"
+            
+            with open(events_file, 'w') as f:
+                json.dump(
+                    [self._serialize_event(e) for e in self._events_buffer],
+                    f,
+                    indent=2
+                )
+            
+            self.logger.debug(f"Flushed {len(self._events_buffer)} events to {events_file}")
+            self._events_buffer.clear()
+            
+        except Exception as e:
+            self.logger.error(f"Failed to flush events: {e}")
+    
+    def flush_all(self) -> None:
+        """Flush all buffers."""
+        self.flush_metrics()
+        self.flush_events()
+    
+    def _serialize_metric(self, metric: Metric) -> Dict[str, Any]:
+        """Serialize a metric for storage."""
+        return {
+            "name": metric.name,
+            "value": metric.value,
+            "timestamp": metric.timestamp,
+            "tags": metric.tags,
+            "metadata": metric.metadata,
+            "service": self.service_name,
+            "session_id": self.session_id
+        }
+    
+    def _serialize_event(self, event: Event) -> Dict[str, Any]:
+        """Serialize an event for storage."""
+        return {
+            "name": event.name,
+            "timestamp": event.timestamp,
+            "properties": event.properties,
+            "user_id": event.user_id,
+            "session_id": event.session_id,
+            "service": self.service_name
+        }
+    
+    def get_session_summary(self) -> Dict[str, Any]:
+        """Get summary of the current session."""
+        return {
+            "session_id": self.session_id,
+            "start_time": self.start_time,
+            "duration": time.time() - self.start_time,
+            "metrics_count": len(self._metrics_buffer),
+            "events_count": len(self._events_buffer),
+            "counters": dict(self._counters),
+            "active_timers": list(self._timers.keys())
+        }
+    
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - flush all data."""
+        self.flush_all()
+
+
+class PerformanceTracker:
+    """High-level performance tracking utilities."""
+    
+    def __init__(self, telemetry_client: Optional[TelemetryClient] = None):
+        self.client = telemetry_client or TelemetryClient(enabled=False)
+    
+    @contextmanager
+    def track_operation(
+        self,
+        operation: str,
+        metadata: Optional[Dict[str, Any]] = None
+    ):
+        """Track a complete operation with timing and status."""
+        start_time = time.time()
+        success = False
+        error = None
+        
+        try:
+            self.client.record_event(f"{operation}.start", properties=metadata)
+            yield
+            success = True
+        except Exception as e:
+            error = str(e)
+            raise
+        finally:
+            duration = time.time() - start_time
+            
+            # Record completion event
+            self.client.record_event(
+                f"{operation}.complete",
+                properties={
+                    "duration": duration,
+                    "success": success,
+                    "error": error,
+                    **(metadata or {})
+                }
+            )
+            
+            # Record timing metric
+            self.client.record_metric(
+                f"operation.{operation}.duration",
+                duration,
+                tags={"success": str(success).lower()}
             )
     
-    def shutdown(self) -> None:
-        """Shutdown telemetry client and flush data."""
-        self.track_event('session_ended', {'session_duration': time.time() - self.start_time})
-        self.flush()
-        self.logger.info("Telemetry client shutdown")
+    def track_resource_usage(self) -> Dict[str, float]:
+        """Track current resource usage."""
+        try:
+            import psutil
+            
+            process = psutil.Process()
+            
+            usage = {
+                "cpu_percent": process.cpu_percent(interval=0.1),
+                "memory_rss_mb": process.memory_info().rss / 1024 / 1024,
+                "memory_vms_mb": process.memory_info().vms / 1024 / 1024,
+                "num_threads": process.num_threads(),
+            }
+            
+            # Record as gauges
+            for metric, value in usage.items():
+                self.client.gauge(f"resource.{metric}", value)
+            
+            return usage
+            
+        except ImportError:
+            self.client.logger.debug("psutil not available for resource tracking")
+            return {}
 
 
 # Global telemetry client instance
-_telemetry_client: Optional[TelemetryClient] = None
+_global_telemetry_client: Optional[TelemetryClient] = None
 
 
 def get_telemetry_client() -> TelemetryClient:
     """Get the global telemetry client instance."""
-    global _telemetry_client
-    if _telemetry_client is None:
-        _telemetry_client = TelemetryClient()
-    return _telemetry_client
+    global _global_telemetry_client
+    
+    if _global_telemetry_client is None:
+        # Check environment for opt-in
+        opt_in = os.environ.get("DAGLAB_TELEMETRY_OPT_IN", "false").lower() == "true"
+        _global_telemetry_client = TelemetryClient(opt_in=opt_in)
+    
+    return _global_telemetry_client
 
 
-# Convenience functions
-def track_event(event_type: str, metadata: Optional[Dict[str, Any]] = None, level: TelemetryLevel = TelemetryLevel.STANDARD) -> str:
-    """Track a telemetry event."""
-    return get_telemetry_client().track_event(event_type, metadata, level)
-
-
-def track_operation(operation_name: str, metadata: Optional[Dict[str, Any]] = None, level: TelemetryLevel = TelemetryLevel.STANDARD):
-    """Context manager to track operation duration."""
-    return get_telemetry_client().track_operation(operation_name, metadata, level)
-
-
-def record_metric(name: str, value: float, metric_type: MetricType = MetricType.GAUGE, tags: Optional[Dict[str, str]] = None, unit: Optional[str] = None, level: TelemetryLevel = TelemetryLevel.STANDARD):
-    """Record a metric value."""
-    get_telemetry_client().record_metric(name, value, metric_type, tags, unit, level)
-
-
-def increment_counter(name: str, value: float = 1, tags: Optional[Dict[str, str]] = None):
-    """Increment a counter metric."""
-    get_telemetry_client().increment_counter(name, value, tags)
-
-
-def set_gauge(name: str, value: float, tags: Optional[Dict[str, str]] = None, unit: Optional[str] = None):
-    """Set a gauge metric."""
-    get_telemetry_client().set_gauge(name, value, tags, unit)
+def setup_telemetry(
+    enabled: bool = True,
+    opt_in: bool = False,
+    **kwargs
+) -> TelemetryClient:
+    """Setup and configure the global telemetry client."""
+    global _global_telemetry_client
+    
+    _global_telemetry_client = TelemetryClient(
+        enabled=enabled,
+        opt_in=opt_in,
+        **kwargs
+    )
+    
+    return _global_telemetry_client

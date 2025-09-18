@@ -1,0 +1,4 @@
+# Dagster workspace configuration
+
+load_from:
+  - python_file: dagster/repository.py

@@ -1,0 +1,63 @@
+{#- Notebook metadata cell template -#}
+"""Notebook metadata and configuration"""
+import json
+from datetime import datetime
+
+notebook_metadata = {
+    "title": "{{ title | default('Daglab Notebook') }}",
+    "description": "{{ description | default('A marimo notebook for Dagster development') }}",
+    "author": "{{ author | default('Daglab User') }}",
+    "created": "{{ created_date | default(now().strftime('%Y-%m-%d')) }}",
+    "modified": datetime.now().isoformat(),
+    "version": "{{ version | default('1.0.0') }}",
+    {%- if tags %}
+    "tags": {{ tags | tojson }},
+    {%- else %}
+    "tags": [],
+    {%- endif %}
+    "config": {
+        "dagster_url": "{{ dagster_url | default('http://localhost:3000') }}",
+        {%- if dagster_deployment %}
+        "deployment": "{{ dagster_deployment }}",
+        {%- endif %}
+        {%- if repository_name %}
+        "repository": "{{ repository_name }}",
+        {%- endif %}
+        {%- if location_name %}
+        "location": "{{ location_name }}",
+        {%- endif %}
+        "auto_refresh": {{ auto_refresh | default('true') | lower }},
+        "refresh_interval": {{ refresh_interval | default(5000) }}
+    },
+    {%- if custom_metadata %}
+    "custom": {{ custom_metadata | tojson }}
+    {%- endif %}
+}
+
+{%- if display_header | default(true) %}
+mo.md(f"""
+# {notebook_metadata['title']}
+
+{notebook_metadata['description']}
+
+{%- if display_author | default(true) %}
+**Author:** {notebook_metadata['author']}  
+{%- endif %}
+{%- if display_dates | default(true) %}
+**Created:** {notebook_metadata['created']}  
+**Modified:** {notebook_metadata['modified']}  
+{%- endif %}
+{%- if display_version | default(true) %}
+**Version:** {notebook_metadata['version']}
+{%- endif %}
+{%- if tags and display_tags | default(false) %}
+
+**Tags:** {', '.join(notebook_metadata['tags'])}
+{%- endif %}
+""")
+{%- endif %}
+
+{%- if expose_config | default(true) %}
+# Make config accessible to other cells
+config = notebook_metadata['config']
+{%- endif %}

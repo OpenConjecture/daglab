@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "dagster-project"
+version = "0.1.0"
+description = "A minimal Dagster project with daglab"
+authors = ["Your Name <you@example.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+dagster = "^1.5"
+dagster-webserver = "^1.5"
+daglab = "^0.1.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

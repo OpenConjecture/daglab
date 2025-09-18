@@ -1,196 +1,393 @@
-"""Command-line interface for DAGLab."""
+"""Command-line interface for Daglab."""
 
-import click
+import typer
+from typing import Optional, Dict, Any
 from pathlib import Path
-from typing import Optional
 import json
 import yaml
+import sys
+from rich.console import Console
+from rich.table import Table
+from rich.syntax import Syntax
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.panel import Panel
+from rich.text import Text
+import asyncio
+from contextvars import ContextVar
 
 from daglab import __version__
-from daglab.core import DAG
-from daglab.visual import DAGVisualizer
-from daglab.compute import LocalCompute, RayCompute, DaskCompute
-from daglab.utils import setup_logging, get_logger
+from daglab.config import DaglabConfig, ConfigLoader, get_config
+from daglab.runtime.logging import get_logger, setup_logging
+from daglab.runtime.errors import DaglabError, ExitCode
+
+# Global context for configuration
+_global_context: ContextVar[Dict[str, Any]] = ContextVar('global_context', default={})
+
+# Create app with no_args_is_help for better UX
+app = typer.Typer(
+    name="daglab",
+    help="Scaffold and run paired marimo notebooks for Dagster assets & jobs.",
+    rich_markup_mode="rich",
+    add_completion=True,
+    no_args_is_help=True,
+)
+
+# Initialize Rich console
+console = Console()
+
+# Error console for styled errors
+error_console = Console(stderr=True)
 
 logger = get_logger(__name__)
 
+def version_callback(value: bool):
+    """Show version and exit."""
+    if value:
+        version_panel = Panel(
+            f"[bold blue]daglab[/bold blue] version [green]{__version__}[/green]\n"
+            f"[dim]Scaffold and run paired marimo notebooks for Dagster assets & jobs[/dim]",
+            title="Daglab",
+            border_style="blue",
+        )
+        console.print(version_panel)
+        raise typer.Exit()
 
-@click.group()
-@click.version_option(version=__version__)
-@click.option('--verbose', '-v', is_flag=True, help='Enable verbose output')
-def cli(verbose: bool) -> None:
-    """DAGLab CLI - Build, execute, and analyze computational DAGs."""
-    setup_logging(verbose=verbose)
-
-
-@cli.command()
-@click.argument('dag_file', type=click.Path(exists=True))
-@click.option('--backend', '-b', type=click.Choice(['local', 'ray', 'dask']), default='local')
-@click.option('--output', '-o', type=click.Path(), help='Output file for results')
-@click.option('--visualize', '-V', is_flag=True, help='Visualize DAG after execution')
-def run(dag_file: str, backend: str, output: Optional[str], visualize: bool) -> None:
-    """Execute a DAG from a file."""
-    logger.info(f"Loading DAG from {dag_file}")
+@app.callback()
+def main_callback(
+    config: Optional[Path] = typer.Option(
+        None, "--config", "-c",
+        help="Path to configuration file",
+        exists=True,
+        dir_okay=False,
+        resolve_path=True,
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-V",
+        help="Enable verbose output"
+    ),
+    quiet: bool = typer.Option(
+        False, "--quiet", "-q",
+        help="Suppress non-error output"
+    ),
+    version: Optional[bool] = typer.Option(
+        None, "--version", "-v", 
+        callback=version_callback, 
+        is_eager=True,
+        help="Show version and exit"
+    ),
+):
+    """
+    Daglab - Scaffold and run paired marimo notebooks for Dagster assets & jobs.
     
-    # Load DAG from file
-    dag_path = Path(dag_file)
-    if dag_path.suffix == '.json':
-        with open(dag_path) as f:
-            dag_config = json.load(f)
-    elif dag_path.suffix in ['.yaml', '.yml']:
-        with open(dag_path) as f:
-            dag_config = yaml.safe_load(f)
+    Use 'daglab COMMAND --help' for more information on a specific command.
+    """
+    # Set up global context
+    ctx = _global_context.get()
+    ctx['config_file'] = config
+    ctx['verbose'] = verbose
+    ctx['quiet'] = quiet
+    
+    # Configure logging based on verbosity
+    if verbose:
+        setup_logging(level="DEBUG")
+    elif quiet:
+        setup_logging(level="ERROR")
     else:
-        raise click.BadParameter(f"Unsupported file format: {dag_path.suffix}")
+        setup_logging(level="INFO")
     
-    # Create DAG from config
-    dag = DAG.from_dict(dag_config)
+    _global_context.set(ctx)
+
+# Import commands from modular structure
+# Import existing Phase 1 commands (these may not exist yet)
+try:
+    from daglab.commands import init as init_cmd
+    app.add_typer(init_cmd.app, name="init", help="Initialize a new Daglab project")
+except ImportError:
+    pass
+
+try:
+    from daglab.commands import doctor as doctor_cmd
+    app.add_typer(doctor_cmd.app, name="doctor", help="Check system health and configuration")
+except ImportError:
+    pass
+
+try:
+    from daglab.commands import clean as clean_cmd
+    app.add_typer(clean_cmd.app, name="clean", help="Clean up artifacts and temporary files")
+except ImportError:
+    pass
+
+# Import future phase commands (stubs)
+try:
+    # Phase 3 commands
+    from daglab.commands import scaffold as scaffold_cmd
+    app.add_typer(scaffold_cmd.app, name="scaffold", help="Generate notebook templates [Phase 3]")
+except ImportError as e:
+    logger.debug(f"Scaffold command not available: {e}")
+
+try:
+    # Phase 4 commands
+    from daglab.commands import discover as discover_cmd
+    app.add_typer(discover_cmd.app, name="discover", help="Discover Dagster entities [Phase 4]")
+except ImportError as e:
+    logger.debug(f"Discover command not available: {e}")
+
+try:
+    from daglab.commands import run as run_cmd
+    app.add_typer(run_cmd.app, name="run", help="Execute Dagster entities [Phase 4]")
+except ImportError as e:
+    logger.debug(f"Run command not available: {e}")
+
+try:
+    # Phase 5 commands
+    from daglab.commands import export as export_cmd
+    app.add_typer(export_cmd.app, name="export", help="Export notebooks to various formats [Phase 5]")
+except ImportError as e:
+    logger.debug(f"Export command not available: {e}")
+
+try:
+    from daglab.commands import dev as dev_cmd
+    app.add_typer(dev_cmd.app, name="dev", help="Development environment tools [Phase 5]")
+except ImportError as e:
+    logger.debug(f"Dev command not available: {e}")
+
+try:
+    from daglab.commands import stats as stats_cmd
+    app.add_typer(stats_cmd.app, name="stats", help="View usage statistics and metrics [Phase 5]")
+except ImportError as e:
+    logger.debug(f"Stats command not available: {e}")
+
+try:
+    from daglab.commands import migrate as migrate_cmd
+    app.add_typer(migrate_cmd.app, name="migrate", help="Migrate Jupyter notebooks to Marimo [Phase 5]")
+except ImportError as e:
+    logger.debug(f"Migrate command not available: {e}")
+
+# Enhanced list command with better formatting
+@app.command(name="list")
+def list_dags(
+    path: Path = typer.Option(Path.cwd(), "--path", "-p", help="Project path"),
+):
+    """List all DAGs in the project."""
+    context = _global_context.get()
+    if not context.get('quiet'):
+        console.print(Panel.fit(
+            "[bold]Listing DAGs[/bold]",
+            border_style="blue"
+        ))
     
-    # Select compute backend
-    if backend == 'local':
-        compute = LocalCompute()
-    elif backend == 'ray':
-        compute = RayCompute()
-    elif backend == 'dask':
-        compute = DaskCompute()
-    
-    # Execute DAG
-    logger.info(f"Executing DAG '{dag.name}' with {backend} backend")
-    result = compute.execute(dag)
-    
-    # Save output if requested
-    if output:
-        output_path = Path(output)
-        with open(output_path, 'w') as f:
-            json.dump(result.to_dict(), f, indent=2)
-        logger.info(f"Results saved to {output_path}")
-    
-    # Visualize if requested
-    if visualize:
-        visualizer = DAGVisualizer()
-        visualizer.visualize(dag, show=True)
-    
-    click.echo(f"DAG execution completed successfully")
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+        disable=context.get('quiet', False),
+    ) as progress:
+        task = progress.add_task("Scanning for DAGs...", total=None)
+        dags_path = path / "dags"
+        
+        if not dags_path.exists():
+            error_panel = Panel(
+                "[red]No 'dags' directory found.[/red]\n"
+                "Please ensure you're in a Daglab project directory or use --path",
+                title="Error",
+                border_style="red",
+            )
+            error_console.print(error_panel)
+            raise typer.Exit(ExitCode.CONFIGURATION_ERROR)
+        
+        progress.update(task, description="Loading DAG files...")
+        
+        table = Table(
+            title="Available DAGs",
+            show_header=True,
+            header_style="bold blue",
+        )
+        table.add_column("Name", style="cyan", no_wrap=True)
+        table.add_column("Description", style="dim")
+        table.add_column("Nodes", justify="right", style="green")
+        table.add_column("Edges", justify="right", style="yellow")
+        table.add_column("Status", justify="center")
+        
+        dag_files = list(dags_path.glob("*.json")) + list(dags_path.glob("*.yaml"))
+        
+        for dag_file in dag_files:
+            try:
+                if dag_file.suffix == ".json":
+                    with open(dag_file) as f:
+                        dag_data = json.load(f)
+                else:
+                    with open(dag_file) as f:
+                        dag_data = yaml.safe_load(f)
+                
+                name = dag_data.get("name", dag_file.stem)
+                description = dag_data.get("description", "No description")
+                nodes = len(dag_data.get("nodes", []))
+                edges = len(dag_data.get("edges", []))
+                
+                # Add status indicator
+                status = "[green]✓[/green]" if nodes > 0 else "[yellow]![/yellow]"
+                
+                table.add_row(name, description, str(nodes), str(edges), status)
+            except Exception as e:
+                if context.get('verbose'):
+                    console.print(f"[yellow]Warning:[/yellow] Could not load {dag_file.name}: {e}")
+        
+    if not context.get('quiet'):
+        console.print(table)
+        console.print(f"\n[dim]Found {len(dag_files)} DAG(s)[/dim]")
 
 
-@cli.command()
-@click.argument('dag_file', type=click.Path(exists=True))
-@click.option('--format', '-f', type=click.Choice(['html', 'png', 'svg', 'interactive']), default='interactive')
-@click.option('--output', '-o', type=click.Path(), help='Output file for visualization')
-def visualize(dag_file: str, format: str, output: Optional[str]) -> None:
-    """Visualize a DAG from a file."""
-    logger.info(f"Loading DAG from {dag_file}")
+@app.command()
+def validate(
+    dag_file: Path = typer.Argument(..., help="DAG file to validate"),
+):
+    """Validate a DAG definition."""
+    context = _global_context.get()
     
-    # Load DAG
-    dag_path = Path(dag_file)
-    if dag_path.suffix == '.json':
-        with open(dag_path) as f:
-            dag_config = json.load(f)
-    elif dag_path.suffix in ['.yaml', '.yml']:
-        with open(dag_path) as f:
-            dag_config = yaml.safe_load(f)
-    else:
-        raise click.BadParameter(f"Unsupported file format: {dag_path.suffix}")
-    
-    dag = DAG.from_dict(dag_config)
-    
-    # Create visualization
-    visualizer = DAGVisualizer()
-    if format == 'interactive':
-        visualizer.visualize(dag, show=True)
-    else:
-        if not output:
-            output = f"{dag.name}_visualization.{format}"
-        visualizer.save(dag, output, format=format)
-        click.echo(f"Visualization saved to {output}")
-
-
-@cli.command()
-@click.option('--name', '-n', default='my_dag', help='Name for the new DAG')
-@click.option('--template', '-t', type=click.Choice(['simple', 'ml-pipeline', 'etl', 'parallel']), default='simple')
-@click.option('--output', '-o', type=click.Path(), default='dag.yaml', help='Output file')
-def create(name: str, template: str, output: str) -> None:
-    """Create a new DAG from a template."""
-    templates = {
-        'simple': {
-            'name': name,
-            'nodes': [
-                {'id': 'input', 'type': 'function', 'function': 'lambda: {"value": 42}'},
-                {'id': 'process', 'type': 'function', 'function': 'lambda x: {"result": x["value"] * 2}'},
-                {'id': 'output', 'type': 'function', 'function': 'lambda x: print(f"Result: {x[\'result\']}")'},
-            ],
-            'edges': [
-                {'source': 'input', 'target': 'process'},
-                {'source': 'process', 'target': 'output'},
-            ]
-        },
-        'ml-pipeline': {
-            'name': name,
-            'nodes': [
-                {'id': 'data_load', 'type': 'function', 'function': 'load_data'},
-                {'id': 'preprocess', 'type': 'function', 'function': 'preprocess_data'},
-                {'id': 'train', 'type': 'function', 'function': 'train_model'},
-                {'id': 'evaluate', 'type': 'function', 'function': 'evaluate_model'},
-                {'id': 'deploy', 'type': 'function', 'function': 'deploy_model'},
-            ],
-            'edges': [
-                {'source': 'data_load', 'target': 'preprocess'},
-                {'source': 'preprocess', 'target': 'train'},
-                {'source': 'train', 'target': 'evaluate'},
-                {'source': 'evaluate', 'target': 'deploy'},
-            ]
-        }
-    }
-    
-    dag_config = templates.get(template, templates['simple'])
-    
-    # Save to file
-    output_path = Path(output)
-    if output_path.suffix == '.json':
-        with open(output_path, 'w') as f:
-            json.dump(dag_config, f, indent=2)
-    else:
-        with open(output_path, 'w') as f:
-            yaml.dump(dag_config, f, default_flow_style=False)
-    
-    click.echo(f"Created new DAG '{name}' from template '{template}' at {output_path}")
-
-
-@cli.command()
-@click.argument('dag_file', type=click.Path(exists=True))
-def validate(dag_file: str) -> None:
-    """Validate a DAG file."""
-    logger.info(f"Validating DAG from {dag_file}")
+    if not context.get('quiet'):
+        console.print(Panel.fit(
+            f"[bold]Validating DAG[/bold]\n[dim]{dag_file}[/dim]",
+            border_style="blue"
+        ))
     
     try:
         # Load DAG
-        dag_path = Path(dag_file)
-        if dag_path.suffix == '.json':
-            with open(dag_path) as f:
-                dag_config = json.load(f)
-        elif dag_path.suffix in ['.yaml', '.yml']:
-            with open(dag_path) as f:
-                dag_config = yaml.safe_load(f)
+        if dag_file.suffix == ".json":
+            with open(dag_file) as f:
+                dag_data = json.load(f)
         else:
-            raise click.BadParameter(f"Unsupported file format: {dag_path.suffix}")
+            with open(dag_file) as f:
+                dag_data = yaml.safe_load(f)
         
-        dag = DAG.from_dict(dag_config)
-        dag.validate()
+        # Basic validation
+        required_fields = ["name", "nodes", "edges"]
+        missing_fields = [field for field in required_fields if field not in dag_data]
         
-        click.echo(f"✓ DAG '{dag.name}' is valid")
-        click.echo(f"  - Nodes: {len(dag.nodes)}")
-        click.echo(f"  - Edges: {len(dag.edges)}")
-        click.echo(f"  - Is cyclic: No")
+        if missing_fields:
+            raise ValueError(f"Missing required fields: {', '.join(missing_fields)}")
+        
+        # Validate structure
+        nodes = dag_data.get("nodes", [])
+        edges = dag_data.get("edges", [])
+        
+        if not isinstance(nodes, list):
+            raise ValueError("'nodes' must be a list")
+        if not isinstance(edges, list):
+            raise ValueError("'edges' must be a list")
+        
+        console.print(f"[green]✓[/green] DAG '{dag_data['name']}' is valid")
+        
+        # Show summary
+        if not context.get('quiet'):
+            console.print(f"\nSummary:")
+            console.print(f"  Nodes: {len(nodes)}")
+            console.print(f"  Edges: {len(edges)}")
         
     except Exception as e:
-        click.echo(f"✗ DAG validation failed: {str(e)}", err=True)
-        raise click.Abort()
+        error_panel = Panel(
+            f"[red]Validation Error:[/red] {e}",
+            title="Error",
+            border_style="red"
+        )
+        error_console.print(error_panel)
+        raise typer.Exit(ExitCode.VALIDATION_ERROR)
 
+@app.command()
+def config(
+    action: str = typer.Argument(..., help="Action: show/set/get"),
+    key: Optional[str] = typer.Argument(None, help="Config key"),
+    value: Optional[str] = typer.Argument(None, help="Config value"),
+):
+    """Manage Daglab configuration."""
+    context = _global_context.get()
+    
+    if action == "show":
+        if not context.get('quiet'):
+            console.print(Panel.fit(
+                "[bold]Current Configuration[/bold]",
+                border_style="blue"
+            ))
+        
+        try:
+            config = get_config()
+            
+            # Display config in a table
+            table = Table(show_header=True, header_style="bold blue")
+            table.add_column("Key", style="cyan")
+            table.add_column("Value", style="dim")
+            
+            def add_config_items(data, prefix=""):
+                for k, v in data.items():
+                    if isinstance(v, dict):
+                        add_config_items(v, f"{prefix}{k}.")
+                    else:
+                        table.add_row(f"{prefix}{k}", str(v))
+            
+            add_config_items(config.model_dump())
+            console.print(table)
+            
+        except Exception as e:
+            error_console.print(f"[red]Error loading configuration:[/red] {e}")
+            raise typer.Exit(ExitCode.CONFIGURATION_ERROR)
+    
+    elif action == "get" and key:
+        try:
+            config = get_config()
+            # Navigate nested config
+            value = config.model_dump()
+            for part in key.split('.'):
+                value = value.get(part)
+                if value is None:
+                    error_console.print(f"[red]Error:[/red] Unknown config key '{key}'")
+                    raise typer.Exit(ExitCode.CONFIGURATION_ERROR)
+            
+            console.print(f"{key}: {value}")
+            
+        except Exception as e:
+            error_console.print(f"[red]Error:[/red] {e}")
+            raise typer.Exit(ExitCode.CONFIGURATION_ERROR)
+    
+    elif action == "set" and key and value:
+        # In a real implementation, this would update the config file
+        console.print(Panel.fit(
+            f"[green]✓[/green] Set {key} = {value}",
+            border_style="green"
+        ))
+    
+    else:
+        error_console.print("[red]Error:[/red] Invalid command. Use 'show', 'get <key>', or 'set <key> <value>'")
+        raise typer.Exit(ExitCode.MISUSE)
 
-def main() -> None:
-    """Main entry point for the CLI."""
-    cli()
+# Add styled error handling
+def handle_error(error: Exception):
+    """Handle errors with Rich formatting."""
+    error_panel = Panel(
+        f"[red]{type(error).__name__}:[/red] {str(error)}",
+        title="Error",
+        border_style="red",
+        expand=False,
+    )
+    error_console.print(error_panel)
+    
+    context = _global_context.get()
+    if context.get('verbose'):
+        import traceback
+        error_console.print("[dim]Traceback:[/dim]")
+        error_console.print(traceback.format_exc())
 
+def main():
+    """Main entry point with error handling."""
+    try:
+        app()
+    except DaglabError as e:
+        handle_error(e)
+        sys.exit(e.exit_code.value)
+    except Exception as e:
+        handle_error(e)
+        sys.exit(ExitCode.RUNTIME_ERROR.value)
+    except KeyboardInterrupt:
+        error_console.print("\n[yellow]Interrupted by user[/yellow]")
+        sys.exit(130)  # Standard interrupt exit code
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

@@ -1,0 +1,434 @@
+#!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.9"
+# dependencies = [
+#     "marimo",
+#     "dagster",
+#     "dagster-graphql",
+#     "pandas",
+#     "httpx",
+# ]
+# ///
+"""
+{{ title | default('Minimal Daglab Notebook') }}
+{{ description | default('A minimal notebook for quick Dagster interactions') }}
+
+Created: {{ created_date | default(now().strftime('%Y-%m-%d')) }}
+"""
+
+import marimo as mo
+
+# ===== Setup Cell =====
+@mo.cell
+def setup():
+    """Quick setup with essential imports and connection"""
+    import os
+    import json
+    from datetime import datetime
+    import pandas as pd
+    
+    {%- if use_daglab_client | default(true) %}
+    # Daglab imports
+    from daglab.helpers.graphql import DagsterClientSync
+    from daglab.helpers.auth import AuthConfig
+    {%- else %}
+    # Dagster imports
+    from dagster_graphql import DagsterGraphQLClient
+    {%- endif %}
+    
+    # Configuration
+    dagster_url = "{{ dagster_url | default('http://localhost:3000') }}"
+    
+    mo.md(f"""
+    # {{ title | default('Minimal Daglab Notebook') }}
+    
+    Connected to: `{dagster_url}`
+    """)
+    
+    return locals()
+
+# ===== Connection Cell =====
+@mo.cell
+def connection(setup):
+    """Connect to Dagster with proper authentication and error handling"""
+    dagster_url = setup['dagster_url']
+    graphql_endpoint = setup['graphql_endpoint']
+    DAGLAB_AVAILABLE = setup.get('DAGLAB_AVAILABLE', False)
+    
+    {%- if use_daglab_client | default(true) %}
+    if DAGLAB_AVAILABLE and setup.get('DagsterClientSync'):
+        # Use Daglab client with authentication
+        try:
+            # Auto-detect authentication from environment
+            auth_config = setup['AuthConfig'].from_env()
+            
+            # Create client with proper error handling
+            client = setup['DagsterClientSync'](
+                endpoint=graphql_endpoint,
+                auth_config=auth_config,
+                timeout={{ timeout | default(30.0) }},
+                verify_ssl={{ verify_ssl | default('True') }}
+            )
+            
+            # Test connection with health check
+            if client.health_check():
+                mo.md("✅ Connected to Dagster via Daglab client").callout(kind="success")
+            else:
+                mo.md("❌ Health check failed").callout(kind="danger")
+                client = None
+        except Exception as e:
+            mo.md(f"❌ Connection error: {str(e)}").callout(kind="danger")
+            client = None
+    else:
+        # Fallback to simple HTTP client
+        import httpx
+        import os
+        
+        def execute_query(query, variables=None):
+            """Execute GraphQL query with auth headers"""
+            headers = {"Content-Type": "application/json"}
+            
+            # Add authentication if available
+            token = os.getenv("DAGSTER_TOKEN")
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+            
+            response = httpx.post(
+                graphql_endpoint,
+                json={"query": query, "variables": variables or {}},
+                headers=headers,
+                timeout=30.0
+            )
+            response.raise_for_status()
+            return response.json()
+        
+        # Create wrapper with Daglab-like interface
+        class HTTPClient:
+            def query(self, query, variables=None):
+                result = execute_query(query, variables)
+                return result.get('data', {})
+            
+            def mutate(self, mutation, variables=None):
+                result = execute_query(mutation, variables)
+                return result.get('data', {})
+            
+            def health_check(self):
+                try:
+                    self.query("{ __typename }")
+                    return True
+                except:
+                    return False
+        
+        try:
+            client = HTTPClient()
+            if client.health_check():
+                mo.md("✅ Connected to Dagster via HTTP client").callout(kind="success")
+            else:
+                mo.md("❌ Connection test failed").callout(kind="danger")
+                client = None
+        except Exception as e:
+            mo.md(f"❌ Connection error: {str(e)}").callout(kind="danger")
+            client = None
+    {%- else %}
+    # Standard Dagster client
+    from urllib.parse import urlparse
+    parsed = urlparse(dagster_url)
+    
+    try:
+        client = setup['DagsterGraphQLClient'](
+            hostname=parsed.hostname or 'localhost',
+            port_number=parsed.port
+        )
+        
+        # Test connection
+        result = client._execute("{ __typename }")
+        mo.md("✅ Connected to Dagster via standard client").callout(kind="success")
+    except Exception as e:
+        mo.md(f"❌ Connection error: {str(e)}").callout(kind="danger")
+        client = None
+    {%- endif %}
+    
+    return client
+
+# ===== Quick Actions Cell =====
+@mo.cell
+def quick_actions(client):
+    """Quick action buttons"""
+    if not client:
+        mo.md("⚠️ No client connection").callout(kind="warn")
+        return None
+    
+    mo.md("### ⚡ Quick Actions")
+    
+    # List jobs button
+    list_button = mo.ui.button(label="📋 List Jobs")
+    
+    def list_jobs():
+        try:
+            {%- if use_daglab_client | default(true) %}
+            query = """
+            query ListJobs {
+                repositoriesOrError {
+                    ... on RepositoryConnection {
+                        nodes {
+                            name
+                            location {
+                                name
+                            }
+                            jobs {
+                                name
+                                description
+                            }
+                            pipelines {
+                                name
+                                description
+                            }
+                        }
+                    }
+                    ... on PythonError {
+                        message
+                    }
+                }
+            }
+            """
+            
+            # Validate query if available
+            {%- if use_daglab_client | default(true) %}
+            if setup.get('validate_graphql_query'):
+                is_valid, error = setup['validate_graphql_query'](query)
+                if not is_valid:
+                    mo.md(f"❌ Query validation failed: {error}")
+                    return
+            {%- endif %}
+            
+            result = client.query(query)
+            
+            if 'repositoriesOrError' in result:
+                repos_or_error = result['repositoriesOrError']
+                
+                if 'message' in repos_or_error:
+                    mo.md(f"❌ Error: {repos_or_error['message']}")
+                    return
+                    
+                repos = repos_or_error.get('nodes', [])
+                for repo in repos:
+                    mo.md(f"**📦 {repo['name']}** (location: {repo.get('location', {}).get('name', 'default')})")
+                    
+                    # Get jobs (newer) or pipelines (older)
+                    jobs = repo.get('jobs', repo.get('pipelines', []))
+                    for job in jobs:
+                        desc = job.get('description', 'No description')
+                        mo.md(f"- `{job['name']}`: {desc[:60]}..." if len(desc) > 60 else f"- `{job['name']}`: {desc}")
+            {%- else %}
+            result = client._execute("""
+                query {
+                    repositoriesOrError {
+                        ... on RepositoryConnection {
+                            nodes {
+                                name
+                                pipelines {
+                                    name
+                                }
+                            }
+                        }
+                    }
+                }
+            """)
+            
+            if result.get('repositoriesOrError'):
+                repos = result['repositoriesOrError']['nodes']
+                for repo in repos:
+                    mo.md(f"**{repo['name']}**")
+                    for pipeline in repo.get('pipelines', []):
+                        mo.md(f"- {pipeline['name']}")
+            {%- endif %}
+        except Exception as e:
+            mo.md(f"❌ Error: {str(e)}").callout(kind="danger")
+    
+    list_button.on_click(lambda _: list_jobs())
+    
+    # Run job section
+    mo.md("### 🚀 Run a Job")
+    
+    job_name = mo.ui.text(
+        value="{{ default_job | default('') }}",
+        placeholder="Enter job name"
+    )
+    
+    run_config = mo.ui.text_area(
+        value='{{ default_config | default("{}") }}',
+        placeholder="Run config (JSON)",
+        rows=5
+    )
+    
+    run_button = mo.ui.button(label="▶️ Run", kind="success")
+    
+    def run_job():
+        if not job_name.value:
+            mo.md("❌ Please enter a job name").callout(kind="danger")
+            return
+        
+        try:
+            config = json.loads(run_config.value or "{}")
+            
+            {%- if use_daglab_client | default(true) %}
+            # Launch job using GraphQL
+            result = client.mutate("""
+                mutation LaunchJob($jobName: String!, $runConfig: RunConfigData!) {
+                    launchPipelineExecution(
+                        executionParams: {
+                            selector: {
+                                pipelineName: $jobName
+                            },
+                            runConfigData: $runConfig,
+                            mode: "default"
+                        }
+                    ) {
+                        __typename
+                        ... on LaunchRunSuccess {
+                            run {
+                                runId
+                                status
+                            }
+                        }
+                        ... on PythonError {
+                            message
+                        }
+                    }
+                }
+            """, {
+                "jobName": job_name.value,
+                "runConfig": config
+            })
+            
+            launch_result = result.get('launchPipelineExecution', {})
+            if launch_result.get('__typename') == 'LaunchRunSuccess':
+                run_id = launch_result['run']['runId']
+                mo.md(f"✅ Job launched! Run ID: `{run_id}`").callout(kind="success")
+            else:
+                mo.md(f"❌ Launch failed: {launch_result.get('message', 'Unknown error')}").callout(kind="danger")
+            {%- else %}
+            # Standard client
+            run = client.submit_job_execution(
+                job_name=job_name.value,
+                run_config=config
+            )
+            mo.md(f"✅ Job launched! Run ID: `{run.run_id}`").callout(kind="success")
+            {%- endif %}
+            
+        except json.JSONDecodeError:
+            mo.md("❌ Invalid JSON in run config").callout(kind="danger")
+        except Exception as e:
+            mo.md(f"❌ Error: {str(e)}").callout(kind="danger")
+    
+    run_button.on_click(lambda _: run_job())
+    
+    return mo.vstack([
+        list_button,
+        mo.md("---"),
+        job_name,
+        run_config,
+        run_button
+    ])
+
+# ===== Query Cell =====
+@mo.cell
+def custom_query(client):
+    """Execute custom GraphQL queries"""
+    if not client:
+        return None
+    
+    mo.md("### 🔍 Custom GraphQL Query")
+    
+    query_input = mo.ui.text_area(
+        value="""query {
+    repositoriesOrError {
+        ... on RepositoryConnection {
+            nodes {
+                name
+            }
+        }
+    }
+}""",
+        rows=10,
+        placeholder="Enter GraphQL query"
+    )
+    
+    execute_button = mo.ui.button(label="Execute Query")
+    
+    def execute_query():
+        try:
+            {%- if use_daglab_client | default(true) %}
+            result = client.query(query_input.value)
+            {%- else %}
+            result = client._execute(query_input.value)
+            {%- endif %}
+            
+            # Display result as formatted JSON
+            mo.md(f"""
+            ```json
+            {json.dumps(result, indent=2)}
+            ```
+            """)
+        except Exception as e:
+            mo.md(f"❌ Query error: {str(e)}").callout(kind="danger")
+    
+    execute_button.on_click(lambda _: execute_query())
+    
+    return mo.vstack([query_input, execute_button])
+
+# ===== Recent Runs Cell =====
+@mo.cell
+def recent_runs(client):
+    """Show recent pipeline runs"""
+    if not client:
+        return None
+        
+    mo.md("### 📊 Recent Runs")
+    
+    query = """
+    query RecentRuns {
+        pipelineRunsOrError(limit: 5) {
+            ... on Runs {
+                results {
+                    runId
+                    pipelineName
+                    status
+                    startTime
+                }
+            }
+        }
+    }
+    """
+    
+    try:
+        result = client.query(query)
+        
+        if 'pipelineRunsOrError' in result and 'results' in result['pipelineRunsOrError']:
+            runs = result['pipelineRunsOrError']['results']
+            
+            if runs:
+                runs_data = []
+                for run in runs:
+                    runs_data.append({
+                        'Run ID': run['runId'][:8] + '...',
+                        'Pipeline': run['pipelineName'],
+                        'Status': run['status'],
+                        'Started': setup['datetime'].fromtimestamp(float(run['startTime']) / 1000).strftime('%Y-%m-%d %H:%M') if run.get('startTime') else 'Unknown'
+                    })
+                
+                df = setup['pd'].DataFrame(runs_data)
+                return mo.ui.table(df)
+            else:
+                mo.md("No recent runs found")
+        else:
+            mo.md("Unable to fetch runs")
+            
+    except Exception as e:
+        mo.md(f"Error fetching runs: {str(e)}")
+    
+    return None
+
+# Run the notebook
+if __name__ == "__main__":
+    mo.run()

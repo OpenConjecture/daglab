@@ -1,417 +1,408 @@
-"""Validation utilities for daglab.
+"""Input validation helpers for security and data integrity."""
 
-This module provides comprehensive validation functions for:
-- Input sanitization
-- YAML validation
-- File path validation
-- Network endpoint validation
-- Dagster and Marimo configuration validation
-"""
-
-import os
-import re
-import yaml
 import ipaddress
+import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Pattern, Set, Union
 from urllib.parse import urlparse
 
+import yaml
+from pydantic import BaseModel, Field, ValidationError, validator
 
-class ValidationError(Exception):
-    """Custom exception for validation errors."""
-    pass
+from daglab.runtime.errors import ValidationError as DaglabValidationError
 
 
-def validate_yaml_content(content: str, schema: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Validate YAML content and optionally check against a schema.
+class ValidationResult:
+    """Result of a validation operation."""
     
-    Args:
-        content: YAML string to validate
-        schema: Optional schema dictionary to validate against
-        
-    Returns:
-        Parsed YAML as dictionary
-        
-    Raises:
-        ValidationError: If YAML is invalid or doesn't match schema
-    """
-    if not content or not isinstance(content, str):
-        raise ValidationError("YAML content must be a non-empty string")
+    def __init__(self, valid: bool = True, errors: Optional[List[str]] = None):
+        self.valid = valid
+        self.errors = errors or []
     
-    # Check for common YAML injection patterns
-    dangerous_patterns = [
-        r'!!python/',  # Python object serialization
-        r'!!subprocess',  # Subprocess execution
-        r'!!import',  # Import statements
-        r'!!eval',  # Eval expressions
-        r'!!exec',  # Exec statements
+    def add_error(self, error: str) -> None:
+        """Add an error to the result."""
+        self.valid = False
+        self.errors.append(error)
+    
+    def merge(self, other: "ValidationResult") -> None:
+        """Merge another validation result into this one."""
+        if not other.valid:
+            self.valid = False
+            self.errors.extend(other.errors)
+    
+    def raise_if_invalid(self) -> None:
+        """Raise ValidationError if validation failed."""
+        if not self.valid:
+            raise DaglabValidationError(
+                "Validation failed",
+                context=ErrorContext(details={'errors': self.errors})
+            )
+
+
+class PathValidator:
+    """Validate file paths for security."""
+    
+    FORBIDDEN_PATTERNS = [
+        r'\.\.',  # Directory traversal
+        r'^/',    # Absolute paths (unless allowed)
+        r'^~',    # Home directory expansion
+        r'[<>"|?*]',  # Invalid characters
+        r'\\',    # Backslash (Windows paths)
     ]
     
-    for pattern in dangerous_patterns:
-        if re.search(pattern, content, re.IGNORECASE):
-            raise ValidationError(f"Potentially dangerous YAML pattern detected: {pattern}")
+    FORBIDDEN_NAMES = {
+        'con', 'prn', 'aux', 'nul',  # Windows reserved
+        'com1', 'com2', 'com3', 'com4',
+        'lpt1', 'lpt2', 'lpt3', 'lpt4',
+    }
     
-    try:
-        # Use safe_load to prevent arbitrary code execution
-        data = yaml.safe_load(content)
-    except yaml.YAMLError as e:
-        raise ValidationError(f"Invalid YAML content: {str(e)}")
-    
-    if schema:
-        _validate_against_schema(data, schema)
-    
-    return data
-
-
-def _validate_against_schema(data: Any, schema: Dict[str, Any], path: str = "") -> None:
-    """Recursively validate data against a schema.
-    
-    Args:
-        data: Data to validate
-        schema: Schema to validate against
-        path: Current path in the data structure (for error messages)
-    """
-    if "type" in schema:
-        expected_type = schema["type"]
-        if expected_type == "string" and not isinstance(data, str):
-            raise ValidationError(f"Expected string at {path}, got {type(data).__name__}")
-        elif expected_type == "integer" and not isinstance(data, int):
-            raise ValidationError(f"Expected integer at {path}, got {type(data).__name__}")
-        elif expected_type == "number" and not isinstance(data, (int, float)):
-            raise ValidationError(f"Expected number at {path}, got {type(data).__name__}")
-        elif expected_type == "boolean" and not isinstance(data, bool):
-            raise ValidationError(f"Expected boolean at {path}, got {type(data).__name__}")
-        elif expected_type == "array" and not isinstance(data, list):
-            raise ValidationError(f"Expected array at {path}, got {type(data).__name__}")
-        elif expected_type == "object" and not isinstance(data, dict):
-            raise ValidationError(f"Expected object at {path}, got {type(data).__name__}")
-    
-    if "required" in schema and isinstance(data, dict):
-        for required_field in schema["required"]:
-            if required_field not in data:
-                raise ValidationError(f"Missing required field: {path}.{required_field}")
-    
-    if "properties" in schema and isinstance(data, dict):
-        for key, value in data.items():
-            if key in schema["properties"]:
-                _validate_against_schema(value, schema["properties"][key], f"{path}.{key}")
-
-
-def validate_file_path(path: Union[str, Path], 
-                      base_dir: Optional[Union[str, Path]] = None,
-                      allowed_extensions: Optional[List[str]] = None,
-                      must_exist: bool = False) -> Path:
-    """Validate a file path for security and correctness.
-    
-    Args:
-        path: File path to validate
-        base_dir: Base directory to restrict paths to (prevents traversal)
-        allowed_extensions: List of allowed file extensions (e.g., ['.yaml', '.yml'])
-        must_exist: Whether the file must already exist
+    @classmethod
+    def validate_path(
+        cls,
+        path: Union[str, Path],
+        base_dir: Optional[Path] = None,
+        allow_absolute: bool = False,
+        allow_symlinks: bool = False,
+        must_exist: bool = False,
+        file_type: Optional[str] = None  # 'file', 'dir', None for any
+    ) -> ValidationResult:
+        """Validate a file path for security and correctness."""
+        result = ValidationResult()
         
-    Returns:
-        Validated Path object
-        
-    Raises:
-        ValidationError: If path is invalid or insecure
-    """
-    if not path:
-        raise ValidationError("File path cannot be empty")
-    
-    # Check for null bytes (common injection technique) - check before Path creation
-    if '\x00' in str(path):
-        raise ValidationError("File path contains null bytes")
-    
-    try:
-        path_obj = Path(path).resolve()
-    except (ValueError, OSError) as e:
-        raise ValidationError(f"Invalid file path: {str(e)}")
-    
-    # Check if path is within base directory (prevent traversal)
-    if base_dir:
-        base_path = Path(base_dir).resolve()
         try:
-            path_obj.relative_to(base_path)
-        except ValueError:
-            raise ValidationError(f"Path '{path}' is outside allowed directory '{base_dir}'")
-    
-    # Check file extension
-    if allowed_extensions:
-        if not any(str(path_obj).endswith(ext) for ext in allowed_extensions):
-            raise ValidationError(f"File extension not allowed. Allowed: {allowed_extensions}")
-    
-    # Check if file exists (if required)
-    if must_exist and not path_obj.exists():
-        raise ValidationError(f"File does not exist: {path}")
-    
-    # Check for dangerous path components
-    dangerous_components = ['..', '~', '$', '`', '|', '>', '<', '&', ';']
-    path_str = str(path_obj)
-    for component in dangerous_components:
-        if component in path_str:
-            raise ValidationError(f"Path contains dangerous component: {component}")
-    
-    return path_obj
-
-
-def validate_network_endpoint(endpoint: str, 
-                            allowed_schemes: Optional[List[str]] = None,
-                            allowed_ports: Optional[List[int]] = None,
-                            allow_localhost: bool = True) -> str:
-    """Validate a network endpoint (URL, host:port, etc.).
-    
-    Args:
-        endpoint: Network endpoint to validate
-        allowed_schemes: Allowed URL schemes (default: ['http', 'https'])
-        allowed_ports: Allowed ports (default: any)
-        allow_localhost: Whether to allow localhost/127.0.0.1
+            path = Path(path)
+        except Exception as e:
+            result.add_error(f"Invalid path format: {e}")
+            return result
         
-    Returns:
-        Validated endpoint string
+        # Check for forbidden patterns
+        path_str = str(path)
+        for pattern in cls.FORBIDDEN_PATTERNS:
+            if re.search(pattern, path_str):
+                if pattern == r'^/' and allow_absolute:
+                    continue
+                result.add_error(f"Path contains forbidden pattern: {pattern}")
         
-    Raises:
-        ValidationError: If endpoint is invalid or insecure
-    """
-    if not endpoint or not isinstance(endpoint, str):
-        raise ValidationError("Endpoint must be a non-empty string")
-    
-    # Set defaults
-    if allowed_schemes is None:
-        allowed_schemes = ['http', 'https']
-    
-    # Try to parse as URL
-    parsed = urlparse(endpoint)
-    
-    # Check if it has a scheme
-    if parsed.scheme:
-        # It's a URL
-        if parsed.scheme not in allowed_schemes:
-            raise ValidationError(f"URL scheme '{parsed.scheme}' not allowed. Allowed: {allowed_schemes}")
-        host = parsed.hostname
-        port = parsed.port
-    else:
-        # No scheme, try to parse as host:port
-        if ':' in endpoint and not endpoint.startswith('['):
-            # Simple host:port format
-            parts = endpoint.rsplit(':', 1)
-            host = parts[0]
+        # Check for forbidden names
+        for part in path.parts:
+            if part.lower() in cls.FORBIDDEN_NAMES:
+                result.add_error(f"Path contains forbidden name: {part}")
+        
+        # Check if absolute when not allowed
+        if path.is_absolute() and not allow_absolute:
+            result.add_error("Absolute paths are not allowed")
+        
+        # Resolve path safely
+        if base_dir:
             try:
-                port = int(parts[1])
+                # Ensure path stays within base_dir
+                base_dir = Path(base_dir).resolve()
+                full_path = (base_dir / path).resolve()
+                
+                if not str(full_path).startswith(str(base_dir)):
+                    result.add_error("Path traversal detected")
+            except Exception as e:
+                result.add_error(f"Path resolution error: {e}")
+        
+        # Check symlinks
+        if not allow_symlinks and path.exists() and path.is_symlink():
+            result.add_error("Symbolic links are not allowed")
+        
+        # Check existence
+        if must_exist and not path.exists():
+            result.add_error(f"Path does not exist: {path}")
+        
+        # Check file type
+        if file_type and path.exists():
+            if file_type == 'file' and not path.is_file():
+                result.add_error(f"Path is not a file: {path}")
+            elif file_type == 'dir' and not path.is_dir():
+                result.add_error(f"Path is not a directory: {path}")
+        
+        return result
+
+
+class NetworkValidator:
+    """Validate network endpoints and URLs."""
+    
+    PRIVATE_IP_RANGES = [
+        ipaddress.ip_network('10.0.0.0/8'),
+        ipaddress.ip_network('172.16.0.0/12'),
+        ipaddress.ip_network('192.168.0.0/16'),
+        ipaddress.ip_network('127.0.0.0/8'),
+        ipaddress.ip_network('::1/128'),
+    ]
+    
+    FORBIDDEN_SCHEMES = {'file', 'ftp', 'telnet'}
+    ALLOWED_SCHEMES = {'http', 'https', 'grpc', 'grpcs'}
+    
+    @classmethod
+    def validate_url(
+        cls,
+        url: str,
+        allowed_schemes: Optional[Set[str]] = None,
+        allow_private_ips: bool = False,
+        allow_ports: Optional[Set[int]] = None,
+        require_https: bool = False
+    ) -> ValidationResult:
+        """Validate a URL for security and correctness."""
+        result = ValidationResult()
+        
+        try:
+            parsed = urlparse(url)
+        except Exception as e:
+            result.add_error(f"Invalid URL format: {e}")
+            return result
+        
+        # Check scheme
+        if parsed.scheme in cls.FORBIDDEN_SCHEMES:
+            result.add_error(f"Forbidden URL scheme: {parsed.scheme}")
+        
+        allowed = allowed_schemes or cls.ALLOWED_SCHEMES
+        if parsed.scheme not in allowed:
+            result.add_error(f"URL scheme not allowed: {parsed.scheme}")
+        
+        if require_https and parsed.scheme != 'https':
+            result.add_error("HTTPS is required")
+        
+        # Check hostname
+        if not parsed.hostname:
+            result.add_error("URL must have a hostname")
+            return result
+        
+        # Check for private IPs
+        if not allow_private_ips:
+            try:
+                ip = ipaddress.ip_address(parsed.hostname)
+                for network in cls.PRIVATE_IP_RANGES:
+                    if ip in network:
+                        result.add_error(f"Private IP addresses not allowed: {ip}")
+                        break
             except ValueError:
-                raise ValidationError(f"Invalid port number: {parts[1]}")
-        else:
-            # Just a hostname or IP
-            host = endpoint
-            port = None
+                # Not an IP address, probably a domain name
+                pass
+        
+        # Check port
+        if parsed.port and allow_ports is not None:
+            if parsed.port not in allow_ports:
+                result.add_error(f"Port not allowed: {parsed.port}")
+        
+        return result
+
+
+class YAMLValidator:
+    """Validate YAML configuration files."""
     
-    # Validate host
-    if not host:
-        raise ValidationError("No host specified in endpoint")
-    
-    # Check for localhost
-    if not allow_localhost:
-        localhost_patterns = ['localhost', '127.0.0.1', '::1', '0.0.0.0']
-        if host and any(pattern == host.lower() for pattern in localhost_patterns):
-            raise ValidationError("Localhost connections are not allowed")
-    
-    # Try to validate as IP address
-    try:
-        ip = ipaddress.ip_address(host)
-        # Check for private/reserved IP ranges
-        if ip.is_private or ip.is_reserved or ip.is_multicast:
-            if not allow_localhost:
-                raise ValidationError(f"Private/reserved IP addresses not allowed: {host}")
-    except ValueError:
-        # Not an IP address, validate as hostname
-        # Check for valid hostname pattern
-        hostname_pattern = re.compile(
-            r'^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*$'
+    @staticmethod
+    def validate_yaml_file(
+        file_path: Union[str, Path],
+        schema: Optional[Dict[str, Any]] = None,
+        safe_load: bool = True
+    ) -> ValidationResult:
+        """Validate a YAML file."""
+        result = ValidationResult()
+        
+        # First validate the path
+        path_result = PathValidator.validate_path(
+            file_path,
+            must_exist=True,
+            file_type='file'
         )
-        if not hostname_pattern.match(host):
-            raise ValidationError(f"Invalid hostname: {host}")
+        result.merge(path_result)
+        
+        if not result.valid:
+            return result
+        
+        try:
+            with open(file_path, 'r') as f:
+                if safe_load:
+                    data = yaml.safe_load(f)
+                else:
+                    data = yaml.load(f, Loader=yaml.FullLoader)
+        except yaml.YAMLError as e:
+            result.add_error(f"YAML parsing error: {e}")
+            return result
+        except Exception as e:
+            result.add_error(f"File reading error: {e}")
+            return result
+        
+        # Validate against schema if provided
+        if schema:
+            schema_result = YAMLValidator.validate_against_schema(data, schema)
+            result.merge(schema_result)
+        
+        return result
     
-    # Validate port
-    if port is not None:
-        if port < 1 or port > 65535:
-            raise ValidationError(f"Invalid port number: {port}")
-        if allowed_ports and port not in allowed_ports:
-            raise ValidationError(f"Port {port} not allowed. Allowed ports: {allowed_ports}")
-    
-    return endpoint
+    @staticmethod
+    def validate_against_schema(
+        data: Any,
+        schema: Dict[str, Any]
+    ) -> ValidationResult:
+        """Validate data against a schema definition."""
+        result = ValidationResult()
+        
+        # This is a simple implementation. In production, you might want to use
+        # a library like jsonschema or cerberus for more comprehensive validation
+        
+        if not isinstance(data, dict):
+            result.add_error("Data must be a dictionary")
+            return result
+        
+        # Check required fields
+        required_fields = schema.get('required', [])
+        for field in required_fields:
+            if field not in data:
+                result.add_error(f"Missing required field: {field}")
+        
+        # Check field types
+        properties = schema.get('properties', {})
+        for field, value in data.items():
+            if field in properties:
+                field_schema = properties[field]
+                expected_type = field_schema.get('type')
+                
+                if expected_type:
+                    type_map = {
+                        'string': str,
+                        'integer': int,
+                        'number': (int, float),
+                        'boolean': bool,
+                        'array': list,
+                        'object': dict
+                    }
+                    
+                    expected_python_type = type_map.get(expected_type)
+                    if expected_python_type and not isinstance(value, expected_python_type):
+                        result.add_error(
+                            f"Field '{field}' has wrong type. "
+                            f"Expected {expected_type}, got {type(value).__name__}"
+                        )
+        
+        # Check for unknown fields
+        if schema.get('additionalProperties') is False:
+            allowed_fields = set(properties.keys())
+            for field in data:
+                if field not in allowed_fields:
+                    result.add_error(f"Unknown field: {field}")
+        
+        return result
 
 
-def validate_dagster_config(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Validate Dagster-specific configuration.
+class InputSanitizer:
+    """Sanitize user input for security."""
     
-    Args:
-        config: Dagster configuration dictionary
+    # Patterns that might indicate injection attempts
+    DANGEROUS_PATTERNS = [
+        r'[;&|`$]',  # Shell metacharacters
+        r'<script',   # XSS attempts
+        r'javascript:', # JavaScript protocol
+        r'vbscript:',  # VBScript protocol
+        r'on\w+\s*=',  # Event handlers
+        r'--',         # SQL comment
+        r'union\s+select',  # SQL injection
+        r'exec\s*\(',  # Python exec
+        r'eval\s*\(',  # Eval functions
+        r'__\w+__',    # Python magic methods
+    ]
+    
+    @classmethod
+    def sanitize_string(
+        cls,
+        value: str,
+        max_length: Optional[int] = None,
+        allowed_chars: Optional[Pattern] = None,
+        strip_html: bool = True
+    ) -> str:
+        """Sanitize a string value."""
+        if not isinstance(value, str):
+            raise TypeError(f"Expected string, got {type(value)}")
         
-    Returns:
-        Validated configuration
+        # Truncate if too long
+        if max_length and len(value) > max_length:
+            value = value[:max_length]
         
-    Raises:
-        ValidationError: If configuration is invalid
-    """
-    if not isinstance(config, dict):
-        raise ValidationError("Dagster config must be a dictionary")
+        # Strip HTML tags if requested
+        if strip_html:
+            value = re.sub(r'<[^>]+>', '', value)
+        
+        # Check against dangerous patterns
+        for pattern in cls.DANGEROUS_PATTERNS:
+            if re.search(pattern, value, re.IGNORECASE):
+                # Remove the dangerous content
+                value = re.sub(pattern, '', value, flags=re.IGNORECASE)
+        
+        # Filter allowed characters
+        if allowed_chars:
+            value = ''.join(c for c in value if allowed_chars.match(c))
+        
+        return value.strip()
     
-    # Define Dagster config schema
-    dagster_schema = {
-        "type": "object",
-        "properties": {
-            "ops": {"type": "object"},
-            "resources": {"type": "object"},
-            "loggers": {"type": "object"},
-            "executor": {"type": "object"},
-            "storage": {"type": "object"},
-            "run_launcher": {"type": "object"},
-            "telemetry": {"type": "object"}
-        }
-    }
-    
-    _validate_against_schema(config, dagster_schema)
-    
-    # Additional Dagster-specific validations
-    if "ops" in config:
-        for op_name, op_config in config["ops"].items():
-            if not isinstance(op_name, str) or not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', op_name):
-                raise ValidationError(f"Invalid op name: {op_name}")
-            if not isinstance(op_config, dict):
-                raise ValidationError(f"Op config for '{op_name}' must be a dictionary")
-    
-    # Validate resources
-    if "resources" in config:
-        for resource_name, resource_config in config["resources"].items():
-            if not isinstance(resource_name, str):
-                raise ValidationError(f"Resource name must be a string: {resource_name}")
-            if not isinstance(resource_config, dict):
-                raise ValidationError(f"Resource config for '{resource_name}' must be a dictionary")
-            
-            # Check for dangerous resource configurations
-            if "config" in resource_config and isinstance(resource_config["config"], dict):
-                dangerous_keys = ["command", "shell", "executable", "script"]
-                for key in dangerous_keys:
-                    if key in resource_config["config"]:
-                        raise ValidationError(f"Potentially dangerous configuration key '{key}' in resource '{resource_name}'")
-    
-    return config
+    @classmethod
+    def sanitize_filename(cls, filename: str) -> str:
+        """Sanitize a filename for safe use."""
+        # Remove path separators
+        filename = filename.replace('/', '_').replace('\\', '_')
+        
+        # Remove dangerous characters
+        filename = re.sub(r'[<>:"|?*]', '_', filename)
+        
+        # Remove leading/trailing dots and spaces
+        filename = filename.strip('. ')
+        
+        # Ensure not empty
+        if not filename:
+            filename = 'unnamed'
+        
+        # Limit length
+        if len(filename) > 255:
+            name, ext = filename.rsplit('.', 1) if '.' in filename else (filename, '')
+            if ext:
+                name = name[:250 - len(ext)]
+                filename = f"{name}.{ext}"
+            else:
+                filename = filename[:255]
+        
+        return filename
 
 
-def validate_marimo_config(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Validate Marimo-specific configuration.
+# Pydantic models for common validation scenarios
+class ConfigModel(BaseModel):
+    """Base model for configuration validation."""
     
-    Args:
-        config: Marimo configuration dictionary
-        
-    Returns:
-        Validated configuration
-        
-    Raises:
-        ValidationError: If configuration is invalid
-    """
-    if not isinstance(config, dict):
-        raise ValidationError("Marimo config must be a dictionary")
-    
-    # Define Marimo config schema
-    marimo_schema = {
-        "type": "object",
-        "properties": {
-            "notebooks": {"type": "object"},
-            "server": {"type": "object"},
-            "runtime": {"type": "object"},
-            "plugins": {"type": "array"},
-            "dependencies": {"type": "array"}
-        }
-    }
-    
-    _validate_against_schema(config, marimo_schema)
-    
-    # Validate notebooks
-    if "notebooks" in config:
-        for notebook_name, notebook_config in config["notebooks"].items():
-            if not isinstance(notebook_name, str):
-                raise ValidationError(f"Notebook name must be a string: {notebook_name}")
-            if not isinstance(notebook_config, dict):
-                raise ValidationError(f"Notebook config for '{notebook_name}' must be a dictionary")
-            
-            # Validate notebook path if present
-            if "path" in notebook_config:
-                validate_file_path(
-                    notebook_config["path"],
-                    allowed_extensions=['.py', '.marimo', '.md'],
-                    must_exist=False
-                )
-    
-    # Validate server configuration
-    if "server" in config:
-        server_config = config["server"]
-        if "host" in server_config:
-            host = server_config['host']
-            port = server_config.get('port', 8000)
-            validate_network_endpoint(f"{host}:{port}")
-        if "port" in server_config:
-            port = server_config["port"]
-            if not isinstance(port, int) or port < 1 or port > 65535:
-                raise ValidationError(f"Invalid server port: {port}")
-    
-    # Validate plugins
-    if "plugins" in config:
-        for plugin in config["plugins"]:
-            if not isinstance(plugin, str):
-                raise ValidationError(f"Plugin name must be a string: {plugin}")
-            # Check for suspicious plugin names
-            if any(char in plugin for char in ['/', '\\', '..', '~', '$']):
-                raise ValidationError(f"Suspicious plugin name: {plugin}")
-    
-    return config
+    class Config:
+        extra = 'forbid'  # No extra fields allowed
+        validate_assignment = True
 
 
-def sanitize_input(value: str, 
-                  max_length: Optional[int] = None,
-                  allowed_chars: Optional[str] = None,
-                  strip_html: bool = True) -> str:
-    """Sanitize user input for general use.
+class DaglabConfigModel(ConfigModel):
+    """Example configuration model for Daglab settings."""
     
-    Args:
-        value: Input string to sanitize
-        max_length: Maximum allowed length
-        allowed_chars: Regex pattern of allowed characters
-        strip_html: Whether to strip HTML tags
-        
-    Returns:
-        Sanitized string
-        
-    Raises:
-        ValidationError: If input is invalid
-    """
-    if not isinstance(value, str):
-        raise ValidationError("Input must be a string")
+    environment: str = Field(..., pattern='^(development|staging|production)$')
+    log_level: str = Field('INFO', pattern='^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$')
+    max_workers: int = Field(4, ge=1, le=100)
+    timeout: float = Field(300.0, gt=0)
+    base_path: Optional[Path] = None
     
-    # Strip leading/trailing whitespace
-    value = value.strip()
-    
-    # Check length
-    if max_length and len(value) > max_length:
-        raise ValidationError(f"Input exceeds maximum length of {max_length}")
-    
-    # Strip HTML if requested
-    if strip_html:
-        # Simple HTML tag removal - handle script tags specially
-        # Remove script tags and their content
-        value = re.sub(r'<script[^>]*>.*?</script>', '', value, flags=re.IGNORECASE | re.DOTALL)
-        # Remove remaining HTML tags
-        value = re.sub(r'<[^>]+>', '', value)
-    
-    # Check allowed characters
-    if allowed_chars:
-        pattern = re.compile(allowed_chars)
-        if not pattern.match(value):
-            raise ValidationError(f"Input contains invalid characters. Allowed pattern: {allowed_chars}")
-    
-    # Remove null bytes
-    value = value.replace('\x00', '')
-    
-    # Remove control characters (except newline and tab)
-    value = ''.join(char for char in value if ord(char) >= 32 or char in '\n\t')
-    
-    return value
+    @validator('base_path')
+    def validate_base_path(cls, v: Optional[Path]) -> Optional[Path]:
+        if v is not None:
+            result = PathValidator.validate_path(v, file_type='dir')
+            if not result.valid:
+                raise ValueError(f"Invalid base path: {', '.join(result.errors)}")
+        return v
+
+
+# Helper functions
+def validate_email(email: str) -> bool:
+    """Validate an email address."""
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    return bool(re.match(pattern, email))
+
+
+def validate_semantic_version(version: str) -> bool:
+    """Validate semantic version string."""
+    pattern = r'^\d+\.\d+\.\d+(?:-[\w.]+)?(?:\+[\w.]+)?$'
+    return bool(re.match(pattern, version))
+
+
+from daglab.runtime.errors import ErrorContext

@@ -1,0 +1,447 @@
+#!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.9"
+# dependencies = [
+#     "marimo",
+#     "dagster",
+#     "dagster-graphql",
+#     "pandas",
+#     "numpy",
+#     "matplotlib",
+#     "plotly",
+#     "rich",
+#     "httpx",
+#     "pyyaml",
+# ]
+# ///
+"""
+{{ title | default('Daglab Notebook') }}
+{{ description | default('A marimo notebook for Dagster pipeline development') }}
+
+Author: {{ author | default('Daglab User') }}
+Created: {{ created_date | default(now().strftime('%Y-%m-%d')) }}
+Version: {{ version | default('1.0.0') }}
+"""
+
+import marimo as mo
+
+# ===== Metadata Cell =====
+@mo.cell
+def metadata():
+    """Notebook metadata and configuration"""
+    import json
+    from datetime import datetime
+    
+    notebook_metadata = {
+        "title": "{{ title | default('Daglab Notebook') }}",
+        "description": "{{ description | default('A marimo notebook for Dagster pipeline development') }}",
+        "author": "{{ author | default('Daglab User') }}",
+        "created": "{{ created_date | default(now().strftime('%Y-%m-%d')) }}",
+        "modified": datetime.now().isoformat(),
+        "version": "{{ version | default('1.0.0') }}",
+        "tags": {{ tags | default([]) | tojson }},
+        "config": {
+            "dagster_url": "{{ dagster_url | default('http://localhost:3000') }}",
+            "dagster_deployment": "{{ deployment | default('default') }}",
+            "auto_refresh": {{ auto_refresh | default('true') | lower }},
+            "use_daglab_client": {{ use_daglab_client | default('true') | lower }}
+        }
+    }
+    
+    mo.md(f"""
+    # {notebook_metadata['title']}
+    
+    {notebook_metadata['description']}
+    
+    **Author:** {notebook_metadata['author']}  
+    **Created:** {notebook_metadata['created']}  
+    **Version:** {notebook_metadata['version']}
+    """)
+    
+    return notebook_metadata
+
+# ===== Imports Cell =====
+@mo.cell
+def imports():
+    """Import necessary libraries and modules"""
+    {% include 'partials/_imports.j2' %}
+    
+    return {
+        "pd": pd, "np": np, "plt": plt, "go": go, "px": px,
+        "console": console, "logger": logger,
+        "Path": Path, "datetime": datetime, "json": json,
+        "asyncio": asyncio, "yaml": yaml if 'yaml' in locals() else None,
+    }
+
+# ===== State Management Cell =====
+@mo.cell
+def state_manager():
+    """Persistent state management across cells"""
+    {% include 'partials/_state.j2' %}
+    
+    # Initialize or retrieve state
+    if 'notebook_state' not in globals():
+        notebook_state = NotebookState()
+    else:
+        notebook_state = globals()['notebook_state']
+    
+    return notebook_state
+
+# ===== Authentication Cell =====
+@mo.cell
+def authentication():
+    """Configure authentication for Dagster"""
+    {% include 'partials/_auth.j2' %}
+    
+    return auth_config
+
+# ===== GraphQL Connection Cell =====
+@mo.cell
+def graphql_connection(metadata, imports, state_manager, authentication):
+    """Establish secure connection to Dagster GraphQL API"""
+    config = metadata['config']
+    console = imports['console']
+    auth_config = authentication
+    
+    # Connection setup
+    {% include 'partials/_connection.j2' %}
+    
+    # Store client in state
+    state_manager.client = client
+    
+    return client, connection_success
+
+# ===== Repository Discovery Cell =====
+@mo.cell
+def repository_discovery(client, connection_success):
+    """Discover available repositories and jobs"""
+    if not client or not connection_success:
+        mo.md("⚠️ No active connection to Dagster").callout(kind="warn")
+        return None, None
+    
+    mo.md("### 📦 Repository Discovery")
+    
+    try:
+        {% if use_daglab_client | default(true) %}
+        # Query for repositories using Daglab client
+        query = """
+        query DiscoverRepositories {
+            repositoriesOrError {
+                ... on RepositoryConnection {
+                    nodes {
+                        id
+                        name
+                        location {
+                            id
+                            name
+                        }
+                        pipelines {
+                            id
+                            name
+                            description
+                            modes {
+                                name
+                                description
+                            }
+                        }
+                        jobs {
+                            id
+                            name
+                            description
+                        }
+                        schedules {
+                            id
+                            name
+                            cronSchedule
+                            pipelineName
+                        }
+                        sensors {
+                            id
+                            name
+                            pipelineName
+                            status
+                        }
+                    }
+                }
+                ... on PythonError {
+                    message
+                    stack
+                }
+            }
+        }
+        """
+        
+        result = client.query(query)
+        
+        if 'repositoriesOrError' in result and 'nodes' in result['repositoriesOrError']:
+            repositories = result['repositoriesOrError']['nodes']
+            
+            # Display repository info
+            for repo in repositories:
+                mo.md(f"""
+                #### 📁 Repository: **{repo['name']}**
+                - **Location:** {repo['location']['name']}
+                - **Jobs:** {len(repo.get('jobs', []))}
+                - **Schedules:** {len(repo.get('schedules', []))}
+                - **Sensors:** {len(repo.get('sensors', []))}
+                """).callout(kind="info")
+            
+            return repositories, result
+        {% else %}
+        # Use standard Dagster client
+        result = client._execute("""
+            query {
+                repositoriesOrError {
+                    ... on RepositoryConnection {
+                        nodes {
+                            name
+                            pipelines {
+                                name
+                            }
+                        }
+                    }
+                }
+            }
+        """)
+        
+        if result.get('repositoriesOrError', {}).get('nodes'):
+            repositories = result['repositoriesOrError']['nodes']
+            return repositories, result
+        {% endif %}
+        
+    except Exception as e:
+        mo.md(f"❌ Failed to discover repositories: {str(e)}").callout(kind="danger")
+        return None, None
+
+# ===== Pipeline Controls Cell =====
+@mo.cell
+def pipeline_controls(client, connection_success, repositories, state_manager):
+    """Interactive controls for pipeline execution"""
+    if not client or not connection_success:
+        return None
+    
+    mo.md("### 🚀 Pipeline Execution Controls")
+    
+    # Get job list from repositories
+    available_jobs = []
+    if repositories:
+        for repo in repositories:
+            for job in repo.get('jobs', repo.get('pipelines', [])):
+                available_jobs.append({
+                    'name': job['name'],
+                    'repository': repo['name'],
+                    'description': job.get('description', '')
+                })
+    
+    {% include 'partials/_run_controls.j2' %}
+    
+    return {
+        "job_select": job_select,
+        "run_config": run_config if 'run_config' in locals() else None,
+        "run_button": run_button,
+        "execute_job": execute_job
+    }
+
+# ===== Run Status Monitor Cell =====
+@mo.cell
+def run_monitor(client, state_manager):
+    """Monitor active pipeline runs"""
+    if not client:
+        return None
+    
+    mo.md("### 📊 Run Status Monitor")
+    
+    # Get recent runs
+    recent_runs = state_manager.runs[-5:] if state_manager.runs else []
+    
+    if not recent_runs:
+        mo.md("No recent runs to display").callout(kind="neutral")
+        return None
+    
+    # Create status table
+    {% if rich_output | default(true) %}
+    table = Table(title="Recent Pipeline Runs")
+    table.add_column("Run ID", style="cyan")
+    table.add_column("Job", style="magenta")
+    table.add_column("Status", style="green")
+    table.add_column("Started", style="yellow")
+    
+    for run in recent_runs:
+        table.add_row(
+            run['run_id'][:8] + "...",
+            run.get('job', 'Unknown'),
+            run['status'],
+            run.get('timestamp', 'Unknown')
+        )
+    
+    console.print(table)
+    {% else %}
+    # Simple table display
+    run_data = []
+    for run in recent_runs:
+        run_data.append({
+            'Run ID': run['run_id'][:8] + "...",
+            'Job': run.get('job', 'Unknown'),
+            'Status': run['status'],
+            'Started': run.get('timestamp', 'Unknown')
+        })
+    
+    mo.ui.table(run_data)
+    {% endif %}
+    
+    # Add refresh button
+    refresh_button = mo.ui.button(label="🔄 Refresh Status")
+    
+    async def refresh_run_status():
+        """Refresh status of active runs"""
+        try:
+            for run in state_manager.runs:
+                if run['status'] not in ['SUCCESS', 'FAILURE', 'CANCELED']:
+                    # Query run status
+                    query = """
+                    query GetRunStatus($runId: ID!) {
+                        pipelineRunOrError(runId: $runId) {
+                            ... on Run {
+                                id
+                                status
+                                startTime
+                                endTime
+                            }
+                        }
+                    }
+                    """
+                    
+                    result = client.query(query, {"runId": run['run_id']})
+                    if 'pipelineRunOrError' in result:
+                        run['status'] = result['pipelineRunOrError']['status']
+            
+            mo.md("✅ Status refreshed").callout(kind="success")
+        except Exception as e:
+            mo.md(f"❌ Failed to refresh: {str(e)}").callout(kind="danger")
+    
+    refresh_button.on_click(lambda _: asyncio.run(refresh_run_status()))
+    
+    return refresh_button
+
+# ===== Data Visualization Cell =====
+@mo.cell
+def data_visualization(state_manager):
+    """Visualize pipeline metrics and results"""
+    mo.md("### 📈 Data Visualization")
+    
+    # Example: Plot run success rate
+    if state_manager.runs:
+        statuses = [run['status'] for run in state_manager.runs]
+        success_rate = statuses.count('SUCCESS') / len(statuses) * 100 if statuses else 0
+        
+        fig = go.Figure(go.Indicator(
+            mode="gauge+number",
+            value=success_rate,
+            title={'text': "Success Rate"},
+            gauge={'axis': {'range': [None, 100]},
+                   'bar': {'color': "green"},
+                   'steps': [
+                       {'range': [0, 50], 'color': "lightgray"},
+                       {'range': [50, 80], 'color': "yellow"},
+                       {'range': [80, 100], 'color': "lightgreen"}],
+                   'threshold': {'line': {'color': "red", 'width': 4},
+                                'thickness': 0.75, 'value': 90}}
+        ))
+        
+        mo.ui.plotly(fig)
+    else:
+        mo.md("No run data available for visualization").callout(kind="neutral")
+    
+    return None
+
+# ===== Custom Analysis Cell =====
+@mo.cell
+def custom_analysis():
+    """Space for custom data analysis and exploration"""
+    mo.md("""
+    ### 🔬 Custom Analysis
+    
+    This cell is reserved for your custom analysis code.
+    You can use all imported libraries and the GraphQL client to:
+    
+    - Query pipeline metadata
+    - Analyze run performance
+    - Create custom visualizations
+    - Export results
+    
+    Available objects:
+    - `client`: GraphQL client connection
+    - `state_manager`: Notebook state management
+    - `pd`, `np`, `plt`: Data analysis libraries
+    - `console`: Rich console for formatted output
+    """)
+    
+    # Example: Query for failed runs
+    {% if show_example_analysis | default(true) %}
+    try:
+        if client and connection_success:
+            query = """
+            query GetFailedRuns($limit: Int!) {
+                pipelineRunsOrError(limit: $limit, filter: {statuses: [FAILURE]}) {
+                    ... on Runs {
+                        results {
+                            id
+                            pipelineName
+                            status
+                            startTime
+                            endTime
+                            stats {
+                                ... on RunStatsSnapshot {
+                                    stepsSucceeded
+                                    stepsFailed
+                                    expectations
+                                    materializations
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            """
+            
+            result = client.query(query, {"limit": 5})
+            
+            if 'pipelineRunsOrError' in result and 'results' in result['pipelineRunsOrError']:
+                failed_runs = result['pipelineRunsOrError']['results']
+                if failed_runs:
+                    mo.md(f"Found {len(failed_runs)} failed runs for analysis")
+                    # Add your analysis code here
+    except Exception as e:
+        print(f"Analysis error: {e}")
+    {% endif %}
+    
+    return None
+
+# ===== Footer Cell =====
+@mo.cell
+def footer():
+    """Notebook footer with helpful information"""
+    mo.md("""
+    ---
+    
+    ### 📚 Resources
+    
+    - [Dagster Documentation](https://docs.dagster.io)
+    - [Marimo Documentation](https://docs.marimo.io)
+    - [Daglab GitHub](https://github.com/yourusername/daglab)
+    
+    ### 💡 Tips
+    
+    - Use `Shift + Enter` to run cells
+    - Check the state manager for persistent data
+    - Monitor the console for detailed logs
+    - Customize the notebook by editing template parameters
+    
+    Generated with Daglab v{{ version | default('1.0.0') }}
+    """)
+    
+    return None
+
+# Run the notebook
+if __name__ == "__main__":
+    mo.run()

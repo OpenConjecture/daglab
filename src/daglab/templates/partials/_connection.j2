@@ -1,0 +1,251 @@
+{#- Dagster GraphQL connection setup with real authentication -#}
+"""Establish secure connection to Dagster GraphQL API"""
+import asyncio
+import os
+from urllib.parse import urljoin, urlparse
+{%- if use_daglab_client | default(true) %}
+from daglab.helpers.graphql import DagsterClient, DagsterClientSync
+from daglab.helpers.auth import AuthConfig, AuthType
+{%- else %}
+from dagster_graphql import DagsterGraphQLClient
+{%- endif %}
+{%- if retry_enabled | default(true) %}
+from time import sleep
+{%- endif %}
+{%- if rich_output | default(true) %}
+from rich.panel import Panel
+{%- endif %}
+
+# Connection parameters
+dagster_url = {{ 'config.get("dagster_url", "http://localhost:3000")' if use_config | default(true) else '"' + (dagster_url | default('http://localhost:3000')) + '"' }}
+{%- if custom_headers %}
+custom_headers = {{ custom_headers | tojson }}
+{%- else %}
+custom_headers = {}
+{%- endif %}
+
+# Build GraphQL endpoint
+graphql_url = urljoin(dagster_url, '/graphql')
+
+{%- if use_daglab_client | default(true) %}
+# Authentication configuration
+auth_config = None
+{%- if auth_type | default('env') == 'env' %}
+# Auto-detect authentication from environment
+auth_config = AuthConfig.from_env()
+{%- elif auth_type == 'bearer' %}
+# Bearer token authentication
+token = {{ token_var | default('os.getenv("DAGSTER_TOKEN")') }}
+if token:
+    auth_config = AuthConfig.bearer(token)
+else:
+    auth_config = AuthConfig(auth_type=AuthType.NONE)
+{%- elif auth_type == 'basic' %}
+# Basic authentication
+username = {{ username_var | default('os.getenv("DAGSTER_USERNAME")') }}
+password = {{ password_var | default('os.getenv("DAGSTER_PASSWORD")') }}
+if username and password:
+    auth_config = AuthConfig.basic(username, password)
+else:
+    auth_config = AuthConfig(auth_type=AuthType.NONE)
+{%- elif auth_type == 'custom' %}
+# Custom headers authentication
+auth_config = AuthConfig.custom(custom_headers)
+{%- else %}
+# No authentication
+auth_config = AuthConfig(auth_type=AuthType.NONE)
+{%- endif %}
+
+# Add any additional headers
+if custom_headers:
+    auth_config.additional_headers.update(custom_headers)
+{%- endif %}
+
+{%- if test_connection | default(true) %}
+# Test connection
+connection_success = False
+client = None
+{%- if retry_enabled | default(true) %}
+max_retries = {{ max_retries | default(3) }}
+retry_count = 0
+
+while retry_count < max_retries and not connection_success:
+    try:
+{%- else %}
+try:
+{%- endif %}
+        {%- if use_daglab_client | default(true) %}
+        # Create Daglab GraphQL client with proper authentication
+        {%- if use_sync | default(true) %}
+        client = DagsterClientSync(
+            endpoint=graphql_url,
+            auth_config=auth_config,
+            timeout={{ timeout | default(30.0) }},
+            verify_ssl={{ verify_ssl | default('True') }},
+            retry_attempts={{ retry_attempts | default(3) }}
+        )
+        {%- else %}
+        client = DagsterClient(
+            endpoint=graphql_url,
+            auth_config=auth_config,
+            timeout={{ timeout | default(30.0) }},
+            verify_ssl={{ verify_ssl | default('True') }},
+            retry_attempts={{ retry_attempts | default(3) }}
+        )
+        {%- endif %}
+        
+        # Test connection with health check
+        {%- if use_sync | default(true) %}
+        connection_success = client.health_check()
+        {%- else %}
+        connection_success = await client.health_check()
+        {%- endif %}
+        {%- else %}
+        # Create standard Dagster GraphQL client
+        parsed = urlparse(dagster_url)
+        client = DagsterGraphQLClient(
+            hostname=parsed.hostname or 'localhost',
+            port_number=parsed.port,
+            {%- if use_https | default(false) %}
+            use_https=True,
+            {%- endif %}
+            {%- if custom_headers %}
+            headers=custom_headers
+            {%- endif %}
+        )
+        
+        # Test with simple query
+        result = client._execute("""{ __typename }""")
+        connection_success = True
+        {%- endif %}
+        
+        if connection_success:
+            {%- if show_success | default(true) %}
+            {%- if rich_output | default(true) %}
+            console.print(Panel(
+                f"✅ Connected to Dagster at {dagster_url}",
+                title="Connection Status",
+                style="green"
+            ))
+            {%- else %}
+            print(f"✅ Connected to Dagster at {dagster_url}")
+            {%- endif %}
+            {%- endif %}
+        
+{%- if retry_enabled | default(true) %}
+    except Exception as e:
+        retry_count += 1
+        if retry_count < max_retries:
+            {%- if show_retry | default(true) %}
+            print(f"Connection attempt {retry_count} failed, retrying...")
+            {%- endif %}
+            sleep({{ retry_delay | default(2) }})
+        else:
+            {%- if show_error | default(true) %}
+            {%- if rich_output | default(true) %}
+            console.print(Panel(
+                f"❌ Failed to connect after {max_retries} attempts: {str(e)}",
+                title="Connection Error",
+                style="red"
+            ))
+            {%- else %}
+            print(f"❌ Failed to connect: {str(e)}")
+            {%- endif %}
+            {%- endif %}
+            client = None
+{%- else %}
+except Exception as e:
+    {%- if show_error | default(true) %}
+    {%- if rich_output | default(true) %}
+    console.print(Panel(
+        f"❌ Failed to connect: {str(e)}",
+        title="Connection Error", 
+        style="red"
+    ))
+    {%- else %}
+    print(f"❌ Failed to connect: {str(e)}")
+    {%- endif %}
+    {%- endif %}
+    connection_success = False
+    client = None
+{%- endif %}
+{%- endif %}
+
+{%- if store_in_state | default(true) %}
+# Store client in state if available
+if client and ('state_manager' in globals() or 'notebook_state' in globals()):
+    state = globals().get('state_manager', globals().get('notebook_state'))
+    if hasattr(state, 'client'):
+        state.client = client
+    elif hasattr(state, '__setitem__'):
+        state['client'] = client
+{%- endif %}
+
+{%- if validate_client | default(false) %}
+# Validate client can fetch repository information
+if client and connection_success:
+    try:
+        {%- if use_daglab_client | default(true) %}
+        # Query for repository information using Daglab client
+        query = """
+        query RepositoryInfo {
+            repositoriesOrError {
+                ... on RepositoryConnection {
+                    nodes {
+                        name
+                        location {
+                            name
+                        }
+                        pipelines {
+                            name
+                        }
+                        jobs {
+                            name
+                        }
+                    }
+                }
+                ... on PythonError {
+                    message
+                    stack
+                }
+            }
+        }
+        """
+        {%- if use_sync | default(true) %}
+        result = client.query(query)
+        {%- else %}
+        result = await client.query(query)
+        {%- endif %}
+        
+        if 'repositoriesOrError' in result:
+            repos = result['repositoriesOrError']
+            if 'nodes' in repos:
+                {%- if show_validation | default(true) %}
+                print(f"✅ Client validated - Found {len(repos['nodes'])} repositories")
+                {%- endif %}
+            elif 'message' in repos:
+                raise Exception(f"Repository error: {repos['message']}")
+        {%- else %}
+        # Standard client validation
+        result = client._execute(
+            """
+            query {
+                repositoriesOrError {
+                    ... on RepositoryConnection {
+                        nodes {
+                            name
+                        }
+                    }
+                }
+            }
+            """
+        )
+        {%- if show_validation | default(true) %}
+        print("✅ Client validated successfully")
+        {%- endif %}
+        {%- endif %}
+    except Exception as e:
+        {%- if show_error | default(true) %}
+        print(f"⚠️ Client validation failed: {str(e)}")
+        {%- endif %}
+{%- endif %}

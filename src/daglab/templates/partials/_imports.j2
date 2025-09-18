@@ -1,0 +1,103 @@
+{#- Common imports for marimo notebooks -#}
+{%- set default_imports = default_imports | default(true) -%}
+{%- set ml_imports = ml_imports | default(false) -%}
+{%- set viz_imports = viz_imports | default(true) -%}
+
+# Standard library imports
+import os
+import sys
+from pathlib import Path
+from typing import Dict, List, Optional, Any, Tuple, Union
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+import json
+{%- if async_support | default(false) %}
+import asyncio
+{%- endif %}
+
+# Data manipulation
+import pandas as pd
+import numpy as np
+
+{%- if viz_imports %}
+# Visualization
+import matplotlib.pyplot as plt
+{%- if advanced_viz | default(false) %}
+import seaborn as sns
+{%- endif %}
+import plotly.graph_objects as go
+import plotly.express as px
+{%- endif %}
+
+# Dagster
+from dagster import (
+    DagsterInstance,
+    {%- if include_assets | default(true) %}
+    asset,
+    AssetIn,
+    Output,
+    {%- endif %}
+    {%- if include_ops | default(false) %}
+    op,
+    job,
+    {%- endif %}
+    RunRequest,
+    RunStatus,
+)
+from dagster_graphql import DagsterGraphQLClient
+{%- if include_storage | default(false) %}
+from dagster.core.storage.pipeline_run import PipelineRunStatus
+{%- endif %}
+
+{%- if rich_output | default(true) %}
+# Rich console output
+from rich.console import Console
+from rich.table import Table
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.syntax import Syntax
+from rich.panel import Panel
+{%- endif %}
+
+{%- if ml_imports %}
+# Machine Learning
+import sklearn
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+{%- if include_models | default(true) %}
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.linear_model import LogisticRegression
+{%- endif %}
+{%- endif %}
+
+# Daglab imports
+try:
+    from daglab.helpers import security, validation
+    from daglab.config import DaglabConfig
+    from daglab.runtime.logging import get_logger
+    {%- if telemetry | default(true) %}
+    from daglab.runtime.telemetry import track_event
+    {%- endif %}
+    {%- if use_daglab_graphql | default(true) %}
+    from daglab.helpers.graphql import DagsterClient, DagsterClientSync, DagsterClientError
+    from daglab.helpers.auth import AuthConfig, AuthType, TokenManager
+    from daglab.helpers.models import GraphQLResponse, GraphQLError
+    {%- endif %}
+    DAGLAB_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Daglab modules not found ({str(e)}). Some features may be unavailable.")
+    security = validation = DaglabConfig = get_logger = track_event = None
+    DagsterClient = DagsterClientSync = DagsterClientError = None
+    AuthConfig = AuthType = TokenManager = None
+    GraphQLResponse = GraphQLError = None
+    DAGLAB_AVAILABLE = False
+
+{%- if rich_output | default(true) %}
+# Initialize console
+console = Console()
+{%- endif %}
+
+{%- if logging | default(true) %}
+# Initialize logger
+logger = get_logger(__name__) if get_logger else None
+{%- endif %}

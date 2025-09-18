@@ -1,162 +1,93 @@
-# daglab Configuration Template
-# 
-# This file provides a template for daglab configuration.
-# Copy this file to one of the following locations:
-#   - ./daglab.yaml (current directory)
-#   - ~/.config/daglab/config.yaml (user config)
-#   - ~/.daglab/config.yaml (alternative user config)
-#
-# Environment variables can override any setting using the daglab_ prefix:
-#   - daglab_version=2.0
-#   - daglab_notebooks_dir=/custom/path
-#   - daglab_dagster__assets_module=my_assets
-#   - daglab_logging__level=DEBUG
+# DagLab Configuration Template
+# Copy this file to daglab.yaml and customize as needed
 
-# Configuration version (do not change unless upgrading)
-version: "1.0"
+# Global settings
+project_name: daglab
+version: 0.1.0
+environment: development  # development, staging, production, test
+debug: true
 
-# Directory where marimo notebooks will be created
-notebooks_dir: "dagster/notebooks"
-
-# Dagster project configuration
+# Dagster configuration
 dagster:
-  # Path to Dagster project (defaults to current directory)
-  # project_dir: "."
-  
-  # Dagster module name (auto-detected if not specified)
-  # module_name: null
-  
-  # Dagster repository name (auto-detected if not specified)
-  # repository_name: null
-  
-  # Module containing Dagster assets
-  assets_module: "assets"
-  
-  # Module containing Dagster jobs
-  jobs_module: "jobs"
+  home: ~/.dagster
+  repository_name: daglab_repository
+  job_name: daglab_job
+  run_launcher: default
+  storage:
+    filesystem:
+      base_dir: dagster_storage
+  event_log_storage:
+    sqlite:
+      base_dir: dagster_events
+  compute_log_manager:
+    module: dagster.core.storage.local_compute_log_manager
+    class: LocalComputeLogManager
 
-# Marimo notebook server configuration
+# Marimo configuration
 marimo:
-  # Port range for marimo servers
-  port_range_start: 2718
-  port_range_end: 2818
-  
-  # Enable auto-reload on file changes
-  auto_reload: true
-  
-  # Default theme (light/dark)
-  theme: "light"
-  
-  # Custom layout configuration file
-  # layout_file: null
+  host: 127.0.0.1
+  port: 2718
+  auto_open: true
+  theme: light  # light, dark, auto
+  notebook_dir: ./notebooks
+  autosave: true
+  autosave_interval: 30
 
-# Default values for generated content
+# Default values
 defaults:
-  # Default author name
-  # author: "Your Name"
-  
-  # Default email
-  # email: "your.email@example.com"
-  
-  # Default license
-  license: "MIT"
-  
-  # Default Python version requirement
-  python_version: "3.10"
-  
-  # Default tags for generated assets
-  # tags:
-  #   - "data-pipeline"
-  #   - "analytics"
+  execution_timeout: 300
+  retry_count: 3
+  retry_delay: 1.0
+  batch_size: 100
+  parallelism: 4
+  temp_dir: /tmp/daglab
 
-# Performance configuration
+# Performance settings
 performance:
-  # Maximum number of parallel workers
-  max_workers: 4
-  
-  # Default operation timeout in seconds
-  timeout: 300
-  
-  # Enable caching for better performance
   cache_enabled: true
-  
-  # Cache directory
-  # cache_dir: "~/.cache/daglab"
+  cache_size: 1000
+  cache_ttl: 3600
+  memory_limit: 4G
+  cpu_limit: null
+  enable_profiling: false
+  profile_output_dir: ./profiles
 
-# Export configuration
+# Export settings
 export:
-  # Default export formats
-  formats:
-    - "python"
-    - "html"
-  
-  # Export output directory
-  # output_dir: "./exports"
-  
-  # Include metadata in exports
+  default_format: yaml  # yaml, json, python, markdown
+  output_dir: ./exports
   include_metadata: true
-  
-  # Minify exported code
-  minify: false
+  pretty_print: true
+  compression: null  # gzip, zip, null
 
 # Logging configuration
 logging:
-  # Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-  level: "INFO"
-  
-  # Log file path (null for stdout only)
-  # file: "./logs/daglab.log"
-  
-  # Log message format
-  # format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  
-  # Use JSON format for structured logging
-  json_format: false
-  
-  # Log rotation size or interval
-  rotation: "10MB"
-  
-  # Number of rotated logs to keep
-  retention: 7
+  level: info  # debug, info, warning, error, critical
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: null
+  max_file_size: 10M
+  backup_count: 5
+  console_output: true
+  structured: false
 
-# Telemetry configuration
+# Telemetry settings
 telemetry:
-  # Enable telemetry collection
   enabled: false
-  
-  # Telemetry level (off, anonymous, full)
-  level: "anonymous"
-  
-  # Custom telemetry endpoint
-  # endpoint: null
-  
-  # Telemetry batch size
-  batch_size: 100
-  
-  # Telemetry flush interval in seconds
+  endpoint: null
+  api_key: null
+  sample_rate: 1.0
+  include_system_info: true
   flush_interval: 60
 
 # Security configuration
 security:
-  # Enable notebook sandboxing
-  sandbox_enabled: true
-  
-  # Allowed imports in notebooks
-  allowed_imports:
-    - "dagster"
-    - "marimo"
-    - "pandas"
-    - "numpy"
-    - "matplotlib"
-    - "seaborn"
-  
-  # Restricted file paths
-  # restricted_paths:
-  #   - "/etc"
-  #   - "/var"
-  
-  # Enable input validation
-  validate_inputs: true
-  
-  # Maximum allowed file size in bytes (100MB)
-  max_file_size: 104857600
+  mode: moderate  # strict, moderate, relaxed
+  enable_ssl: false
+  ssl_cert: null
+  ssl_key: null
+  allowed_hosts:
+    - localhost
+    - 127.0.0.1
+  enable_auth: false
+  auth_token: null
+  encrypt_storage: false

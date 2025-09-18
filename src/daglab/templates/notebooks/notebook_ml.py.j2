@@ -1,0 +1,723 @@
+#!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.9"
+# dependencies = [
+#     "marimo",
+#     "dagster",
+#     "dagster-graphql",
+#     "pandas",
+#     "numpy",
+#     "matplotlib",
+#     "plotly",
+#     "scikit-learn",
+#     "rich",
+#     "httpx",
+#     "pyyaml",
+# ]
+# ///
+"""
+{{ title | default('ML Pipeline Notebook') }}
+{{ description | default('Machine learning pipeline development with Dagster') }}
+
+Author: {{ author | default('Daglab User') }}
+Created: {{ created_date | default(now().strftime('%Y-%m-%d')) }}
+"""
+
+import marimo as mo
+
+# ===== Metadata Cell =====
+@mo.cell
+def metadata():
+    """Notebook metadata and ML configuration"""
+    import json
+    from datetime import datetime
+    
+    notebook_metadata = {
+        "title": "{{ title | default('ML Pipeline Notebook') }}",
+        "description": "{{ description | default('Machine learning pipeline development with Dagster') }}",
+        "author": "{{ author | default('Daglab User') }}",
+        "created": "{{ created_date | default(now().strftime('%Y-%m-%d')) }}",
+        "version": "{{ version | default('1.0.0') }}",
+        "ml_config": {
+            "experiment_name": "{{ experiment_name | default('daglab_ml_experiment') }}",
+            "model_registry": "{{ model_registry | default('local') }}",
+            "tracking_backend": "{{ tracking_backend | default('mlflow') }}",
+            "dagster_url": "{{ dagster_url | default('http://localhost:3000') }}"
+        }
+    }
+    
+    mo.md(f"""
+    # {notebook_metadata['title']}
+    
+    {notebook_metadata['description']}
+    
+    **Experiment:** {notebook_metadata['ml_config']['experiment_name']}  
+    **Created:** {notebook_metadata['created']}
+    """)
+    
+    return notebook_metadata
+
+# ===== ML Imports Cell =====
+@mo.cell
+def imports():
+    """Import ML and data science libraries"""
+    {% set ml_imports = true %}
+    {% set advanced_viz = true %}
+    {% include 'partials/_imports.j2' %}
+    
+    # Additional ML imports
+    {%- if include_deep_learning | default(false) %}
+    try:
+        import torch
+        import tensorflow as tf
+        DL_AVAILABLE = True
+    except ImportError:
+        torch = tf = None
+        DL_AVAILABLE = False
+    {%- endif %}
+    
+    {%- if include_mlflow | default(false) %}
+    try:
+        import mlflow
+        import mlflow.sklearn
+        MLFLOW_AVAILABLE = True
+    except ImportError:
+        mlflow = None
+        MLFLOW_AVAILABLE = False
+    {%- endif %}
+    
+    return {
+        "pd": pd, "np": np, "plt": plt, "go": go, "px": px,
+        "console": console, "logger": logger,
+        "sklearn": sklearn, "sns": sns if 'sns' in locals() else None,
+        {%- if include_deep_learning | default(false) %}
+        "torch": torch, "tf": tf, "DL_AVAILABLE": DL_AVAILABLE,
+        {%- endif %}
+        {%- if include_mlflow | default(false) %}
+        "mlflow": mlflow, "MLFLOW_AVAILABLE": MLFLOW_AVAILABLE,
+        {%- endif %}
+    }
+
+# ===== ML State Manager Cell =====
+@mo.cell
+def ml_state():
+    """Extended state management for ML workflows"""
+    from dataclasses import dataclass, field
+    from typing import Dict, List, Any, Optional
+    import numpy as np
+    
+    @dataclass
+    class MLState:
+        """State manager for ML experiments"""
+        experiments: List[Dict[str, Any]] = field(default_factory=list)
+        models: Dict[str, Any] = field(default_factory=dict)
+        datasets: Dict[str, pd.DataFrame] = field(default_factory=dict)
+        metrics: Dict[str, List[float]] = field(default_factory=dict)
+        feature_importance: Dict[str, np.ndarray] = field(default_factory=dict)
+        predictions: Dict[str, np.ndarray] = field(default_factory=dict)
+        client: Optional[Any] = None
+        
+        def log_experiment(self, name: str, params: Dict, metrics: Dict, model=None):
+            """Log an ML experiment"""
+            self.experiments.append({
+                "name": name,
+                "timestamp": datetime.now().isoformat(),
+                "params": params,
+                "metrics": metrics,
+                "model_type": type(model).__name__ if model else None
+            })
+            
+            if model:
+                self.models[name] = model
+        
+        def get_best_model(self, metric: str = "accuracy", higher_better: bool = True):
+            """Get the best model based on a metric"""
+            if not self.experiments:
+                return None
+            
+            best_exp = max(self.experiments, 
+                          key=lambda x: x['metrics'].get(metric, 0) if higher_better 
+                          else -x['metrics'].get(metric, float('inf')))
+            
+            return self.models.get(best_exp['name'])
+        
+        def compare_experiments(self) -> pd.DataFrame:
+            """Create comparison dataframe of all experiments"""
+            if not self.experiments:
+                return pd.DataFrame()
+            
+            return pd.DataFrame(self.experiments)
+    
+    # Initialize ML state
+    if 'ml_state' not in globals():
+        ml_state = MLState()
+    else:
+        ml_state = globals()['ml_state']
+    
+    return ml_state
+
+# ===== Dagster Connection Cell =====
+@mo.cell 
+def connection(metadata, imports, ml_state):
+    """Connect to Dagster with ML-specific configuration"""
+    config = metadata['ml_config']
+    
+    {% include 'partials/_auth.j2' %}
+    {% include 'partials/_connection.j2' %}
+    
+    # Store client in ML state
+    ml_state.client = client
+    
+    return client, connection_success
+
+# ===== Data Loading Cell =====
+@mo.cell
+def data_loading(client, ml_state):
+    """Load and prepare data for ML pipelines"""
+    mo.md("### 📊 Data Loading")
+    
+    # Data source selector
+    data_source = mo.ui.dropdown(
+        options=["sample", "dagster_asset", "upload", "custom"],
+        value="sample",
+        label="Data Source"
+    )
+    
+    load_button = mo.ui.button(label="Load Data")
+    
+    def load_data():
+        try:
+            if data_source.value == "sample":
+                # Load sample dataset
+                from sklearn.datasets import load_iris, load_wine, load_diabetes
+                
+                datasets = {
+                    "iris": load_iris(as_frame=True),
+                    "wine": load_wine(as_frame=True),
+                    "diabetes": load_diabetes(as_frame=True)
+                }
+                
+                for name, data in datasets.items():
+                    df = data.frame if hasattr(data, 'frame') else data.data
+                    ml_state.datasets[name] = df
+                    mo.md(f"✅ Loaded {name} dataset: {df.shape}")
+                
+            elif data_source.value == "dagster_asset" and client:
+                # Query for available data assets
+                {%- if use_daglab_client | default(true) %}
+                result = client.query("""
+                    query {
+                        assetsOrError {
+                            ... on AssetConnection {
+                                nodes {
+                                    key {
+                                        path
+                                    }
+                                    description
+                                }
+                            }
+                        }
+                    }
+                """)
+                
+                if 'assetsOrError' in result:
+                    assets = result['assetsOrError']['nodes']
+                    mo.md("Available data assets:")
+                    for asset in assets[:5]:  # Show first 5
+                        mo.md(f"- {'.'.join(asset['key']['path'])}")
+                {%- endif %}
+                
+            mo.md("✅ Data loading complete").callout(kind="success")
+            
+        except Exception as e:
+            mo.md(f"❌ Error loading data: {str(e)}").callout(kind="danger")
+    
+    load_button.on_click(lambda _: load_data())
+    
+    return mo.vstack([data_source, load_button])
+
+# ===== Feature Engineering Cell =====
+@mo.cell
+def feature_engineering(ml_state):
+    """Feature engineering and preprocessing"""
+    mo.md("### 🔧 Feature Engineering")
+    
+    if not ml_state.datasets:
+        mo.md("⚠️ No datasets loaded").callout(kind="warn")
+        return None
+    
+    # Dataset selector
+    dataset_name = mo.ui.dropdown(
+        options=list(ml_state.datasets.keys()),
+        label="Select Dataset"
+    )
+    
+    # Feature engineering options
+    scale_features = mo.ui.checkbox(label="Scale features", value=True)
+    remove_nulls = mo.ui.checkbox(label="Remove null values", value=True)
+    encode_categorical = mo.ui.checkbox(label="Encode categorical variables", value=True)
+    
+    process_button = mo.ui.button(label="Process Features")
+    
+    def process_features():
+        try:
+            df = ml_state.datasets[dataset_name.value].copy()
+            
+            if remove_nulls.value:
+                df = df.dropna()
+            
+            if encode_categorical.value:
+                from sklearn.preprocessing import LabelEncoder
+                le = LabelEncoder()
+                for col in df.select_dtypes(include=['object']).columns:
+                    df[col] = le.fit_transform(df[col])
+            
+            if scale_features.value:
+                from sklearn.preprocessing import StandardScaler
+                scaler = StandardScaler()
+                numeric_cols = df.select_dtypes(include=[np.number]).columns
+                df[numeric_cols] = scaler.fit_transform(df[numeric_cols])
+                
+                # Store scaler in state
+                ml_state.models[f"{dataset_name.value}_scaler"] = scaler
+            
+            # Update dataset
+            ml_state.datasets[f"{dataset_name.value}_processed"] = df
+            
+            mo.md(f"✅ Processed dataset shape: {df.shape}").callout(kind="success")
+            
+            # Show sample
+            mo.ui.table(df.head())
+            
+        except Exception as e:
+            mo.md(f"❌ Processing error: {str(e)}").callout(kind="danger")
+    
+    process_button.on_click(lambda _: process_features)
+    
+    return mo.vstack([
+        dataset_name,
+        scale_features,
+        remove_nulls,
+        encode_categorical,
+        process_button
+    ])
+
+# ===== ML Pipeline Definition Cell =====
+@mo.cell
+def ml_pipeline_definition(client, ml_state):
+    """Define ML pipeline for Dagster"""
+    mo.md("### 🏗️ ML Pipeline Definition")
+    
+    pipeline_code = mo.ui.text_area(
+        value="""from dagster import job, op, Out, In
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score
+
+@op(out=Out(dict))
+def load_data():
+    # Load your data here
+    from sklearn.datasets import load_iris
+    data = load_iris()
+    return {
+        'X': data.data,
+        'y': data.target,
+        'feature_names': data.feature_names
+    }
+
+@op(ins={"data": In(dict)}, out=Out(dict))
+def split_data(data):
+    X_train, X_test, y_train, y_test = train_test_split(
+        data['X'], data['y'], test_size=0.2, random_state=42
+    )
+    return {
+        'X_train': X_train,
+        'X_test': X_test,
+        'y_train': y_train,
+        'y_test': y_test
+    }
+
+@op(ins={"data": In(dict)}, out=Out(dict))
+def train_model(data):
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model.fit(data['X_train'], data['y_train'])
+    
+    # Evaluate
+    y_pred = model.predict(data['X_test'])
+    accuracy = accuracy_score(data['y_test'], y_pred)
+    
+    return {
+        'model': model,
+        'accuracy': accuracy,
+        'predictions': y_pred
+    }
+
+@job
+def ml_training_pipeline():
+    data = load_data()
+    split = split_data(data)
+    train_model(split)
+""",
+        rows=30,
+        label="ML Pipeline Code"
+    )
+    
+    deploy_button = mo.ui.button(label="Deploy to Dagster", kind="success")
+    
+    def deploy_pipeline():
+        mo.md("🚧 Pipeline deployment would happen here").callout(kind="info")
+        # In a real implementation, this would:
+        # 1. Validate the pipeline code
+        # 2. Create a temporary Python module
+        # 3. Load it into Dagster
+        # 4. Register with the repository
+    
+    deploy_button.on_click(lambda _: deploy_pipeline())
+    
+    return mo.vstack([pipeline_code, deploy_button])
+
+# ===== Model Training Cell =====
+@mo.cell
+def model_training(ml_state):
+    """Train ML models with different algorithms"""
+    mo.md("### 🤖 Model Training")
+    
+    if not ml_state.datasets:
+        mo.md("⚠️ No datasets available").callout(kind="warn")
+        return None
+    
+    # Model selection
+    model_type = mo.ui.dropdown(
+        options=["RandomForest", "LogisticRegression", "GradientBoosting", "SVM", "NeuralNetwork"],
+        value="RandomForest",
+        label="Model Type"
+    )
+    
+    # Hyperparameters
+    mo.md("#### Hyperparameters")
+    
+    n_estimators = mo.ui.slider(min=10, max=200, value=100, label="Number of Estimators")
+    max_depth = mo.ui.slider(min=1, max=20, value=5, label="Max Depth")
+    test_size = mo.ui.slider(min=0.1, max=0.5, value=0.2, label="Test Size")
+    
+    train_button = mo.ui.button(label="Train Model", kind="success")
+    
+    def train_model():
+        try:
+            # Get processed dataset
+            dataset_key = next((k for k in ml_state.datasets.keys() if 'processed' in k), None)
+            if not dataset_key:
+                mo.md("❌ No processed dataset found").callout(kind="danger")
+                return
+            
+            df = ml_state.datasets[dataset_key]
+            
+            # Assume last column is target
+            X = df.iloc[:, :-1].values
+            y = df.iloc[:, -1].values
+            
+            # Split data
+            from sklearn.model_selection import train_test_split
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=test_size.value, random_state=42
+            )
+            
+            # Train model
+            if model_type.value == "RandomForest":
+                from sklearn.ensemble import RandomForestClassifier
+                model = RandomForestClassifier(
+                    n_estimators=n_estimators.value,
+                    max_depth=max_depth.value,
+                    random_state=42
+                )
+            elif model_type.value == "LogisticRegression":
+                from sklearn.linear_model import LogisticRegression
+                model = LogisticRegression(max_iter=1000)
+            elif model_type.value == "GradientBoosting":
+                from sklearn.ensemble import GradientBoostingClassifier
+                model = GradientBoostingClassifier(
+                    n_estimators=n_estimators.value,
+                    max_depth=max_depth.value
+                )
+            
+            # Fit model
+            model.fit(X_train, y_train)
+            
+            # Evaluate
+            from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+            y_pred = model.predict(X_test)
+            
+            accuracy = accuracy_score(y_test, y_pred)
+            precision, recall, f1, _ = precision_recall_fscore_support(
+                y_test, y_pred, average='weighted'
+            )
+            
+            # Log experiment
+            exp_name = f"{model_type.value}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            ml_state.log_experiment(
+                name=exp_name,
+                params={
+                    "model_type": model_type.value,
+                    "n_estimators": n_estimators.value,
+                    "max_depth": max_depth.value,
+                    "test_size": test_size.value
+                },
+                metrics={
+                    "accuracy": accuracy,
+                    "precision": precision,
+                    "recall": recall,
+                    "f1": f1
+                },
+                model=model
+            )
+            
+            # Store predictions
+            ml_state.predictions[exp_name] = y_pred
+            
+            # Display results
+            mo.md(f"""
+            ✅ **Model Training Complete**
+            
+            - **Accuracy:** {accuracy:.4f}
+            - **Precision:** {precision:.4f}
+            - **Recall:** {recall:.4f}
+            - **F1 Score:** {f1:.4f}
+            """).callout(kind="success")
+            
+            # Feature importance for tree-based models
+            if hasattr(model, 'feature_importances_'):
+                ml_state.feature_importance[exp_name] = model.feature_importances_
+            
+        except Exception as e:
+            mo.md(f"❌ Training error: {str(e)}").callout(kind="danger")
+            import traceback
+            print(traceback.format_exc())
+    
+    train_button.on_click(lambda _: train_model())
+    
+    return mo.vstack([
+        model_type,
+        n_estimators,
+        max_depth,
+        test_size,
+        train_button
+    ])
+
+# ===== Model Comparison Cell =====
+@mo.cell
+def model_comparison(ml_state, imports):
+    """Compare trained models"""
+    mo.md("### 📊 Model Comparison")
+    
+    if not ml_state.experiments:
+        mo.md("No experiments to compare").callout(kind="neutral")
+        return None
+    
+    # Create comparison dataframe
+    comparison_df = ml_state.compare_experiments()
+    
+    # Extract metrics for visualization
+    metrics_data = []
+    for exp in ml_state.experiments:
+        for metric, value in exp['metrics'].items():
+            metrics_data.append({
+                'Model': exp['name'],
+                'Metric': metric,
+                'Value': value
+            })
+    
+    metrics_df = pd.DataFrame(metrics_data)
+    
+    # Create comparison chart
+    if not metrics_df.empty:
+        fig = px.bar(
+            metrics_df,
+            x='Model',
+            y='Value',
+            color='Metric',
+            barmode='group',
+            title='Model Performance Comparison'
+        )
+        
+        mo.ui.plotly(fig)
+    
+    # Best model info
+    best_model = ml_state.get_best_model()
+    if best_model:
+        best_exp = max(ml_state.experiments, 
+                      key=lambda x: x['metrics'].get('accuracy', 0))
+        
+        mo.md(f"""
+        🏆 **Best Model**: {best_exp['name']}
+        - **Type**: {best_exp['model_type']}
+        - **Accuracy**: {best_exp['metrics']['accuracy']:.4f}
+        """).callout(kind="success")
+    
+    # Detailed comparison table
+    mo.md("#### Detailed Metrics")
+    mo.ui.table(comparison_df)
+    
+    return None
+
+# ===== Feature Importance Visualization Cell =====
+@mo.cell
+def feature_importance_viz(ml_state):
+    """Visualize feature importance"""
+    mo.md("### 📈 Feature Importance")
+    
+    if not ml_state.feature_importance:
+        mo.md("No feature importance data available").callout(kind="neutral")
+        return None
+    
+    # Select model
+    model_name = mo.ui.dropdown(
+        options=list(ml_state.feature_importance.keys()),
+        label="Select Model"
+    )
+    
+    def plot_importance():
+        importance = ml_state.feature_importance[model_name.value]
+        
+        # Create feature importance plot
+        fig = go.Figure(go.Bar(
+            x=importance,
+            y=[f"Feature {i}" for i in range(len(importance))],
+            orientation='h'
+        ))
+        
+        fig.update_layout(
+            title=f"Feature Importance - {model_name.value}",
+            xaxis_title="Importance",
+            yaxis_title="Features"
+        )
+        
+        mo.ui.plotly(fig)
+    
+    model_name.observe(lambda _: plot_importance())
+    
+    return model_name
+
+# ===== Deploy Best Model Cell =====
+@mo.cell
+def deploy_model(client, ml_state):
+    """Deploy the best model as a Dagster asset"""
+    mo.md("### 🚀 Model Deployment")
+    
+    best_model = ml_state.get_best_model()
+    if not best_model:
+        mo.md("No trained models available").callout(kind="warn")
+        return None
+    
+    deployment_config = mo.ui.text_area(
+        value="""{
+    "model_name": "best_ml_model",
+    "version": "1.0.0",
+    "tags": {
+        "environment": "production",
+        "framework": "sklearn"
+    },
+    "serving_config": {
+        "batch_size": 32,
+        "timeout": 60
+    }
+}""",
+        rows=10,
+        label="Deployment Configuration"
+    )
+    
+    deploy_button = mo.ui.button(label="Deploy to Dagster", kind="success")
+    
+    def deploy():
+        try:
+            config = json.loads(deployment_config.value)
+            
+            mo.md("""
+            🚧 **Deployment Steps** (would execute in production):
+            1. Serialize model with joblib/pickle
+            2. Upload to model registry
+            3. Create Dagster asset for model serving
+            4. Configure monitoring and alerts
+            5. Set up A/B testing if needed
+            """).callout(kind="info")
+            
+            # In production, this would create a Dagster asset/op
+            
+            mo.md("✅ Model deployment initiated").callout(kind="success")
+            
+        except Exception as e:
+            mo.md(f"❌ Deployment error: {str(e)}").callout(kind="danger")
+    
+    deploy_button.on_click(lambda _: deploy())
+    
+    return mo.vstack([deployment_config, deploy_button])
+
+# ===== Monitoring Dashboard Cell =====
+@mo.cell
+def monitoring_dashboard(ml_state):
+    """ML monitoring dashboard"""
+    mo.md("### 📊 ML Monitoring Dashboard")
+    
+    # Metrics over time
+    if ml_state.metrics:
+        # Create time series plot
+        metrics_history = []
+        for i, exp in enumerate(ml_state.experiments):
+            for metric, value in exp['metrics'].items():
+                metrics_history.append({
+                    'Index': i,
+                    'Metric': metric,
+                    'Value': value,
+                    'Timestamp': exp['timestamp']
+                })
+        
+        if metrics_history:
+            df = pd.DataFrame(metrics_history)
+            
+            fig = px.line(
+                df,
+                x='Index',
+                y='Value',
+                color='Metric',
+                title='Model Performance Over Time',
+                markers=True
+            )
+            
+            mo.ui.plotly(fig)
+    
+    # Summary statistics
+    if ml_state.experiments:
+        total_experiments = len(ml_state.experiments)
+        avg_accuracy = np.mean([e['metrics'].get('accuracy', 0) for e in ml_state.experiments])
+        
+        mo.md(f"""
+        ### 📈 Summary Statistics
+        
+        - **Total Experiments:** {total_experiments}
+        - **Average Accuracy:** {avg_accuracy:.4f}
+        - **Best Accuracy:** {max(e['metrics'].get('accuracy', 0) for e in ml_state.experiments):.4f}
+        - **Models Trained:** {len(ml_state.models)}
+        """)
+    
+    return None
+
+# ===== Footer Cell =====
+@mo.cell
+def footer():
+    """Notebook footer"""
+    mo.md("""
+    ---
+    
+    ### 🔗 Resources
+    
+    - [Dagster ML Guide](https://docs.dagster.io/guides/dagster/ml-pipeline)
+    - [Scikit-learn Documentation](https://scikit-learn.org)
+    - [MLflow Integration](https://mlflow.org)
+    
+    Generated with Daglab ML Template v{{ version | default('1.0.0') }}
+    """)
+    
+    return None
+
+# Run the notebook
+if __name__ == "__main__":
+    mo.run()
