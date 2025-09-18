@@ -28,7 +28,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       
@@ -62,7 +62,7 @@ jobs:
     needs: [validate, test]
     
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -103,7 +103,7 @@ jobs:
     environment: test-pypi
     
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -128,7 +128,7 @@ jobs:
     needs: [validate]
     
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           
@@ -152,7 +152,7 @@ jobs:
     needs: [validate, build, test-pypi, changelog]
     
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -177,7 +177,7 @@ jobs:
     environment: pypi
     
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -196,7 +196,7 @@ jobs:
     needs: [validate, test]
     
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
